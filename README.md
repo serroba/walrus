@@ -12,7 +12,11 @@ Current modeling objective: capture how behavior shifts with group size and hist
 
 - `crates/walrus-engine/src/lib.rs`:
   - core stock-flow and agent-based interaction engine,
-  - micro->macro projection and superorganism metrics.
+  - micro->macro projection and superorganism metrics,
+  - adaptive governance module (Laissez/Redistributive/Extractive) with stress channel (resource -> price -> legitimacy),
+  - oxytocin model: continuous 3D affinity vectors driving in-group bonding and out-group othering with emergent tribal clustering,
+  - agent roles (Producer/Coordinator/Trader) with role-based interaction modifiers,
+  - two-layer war mechanics: society-level wars (inter-society) and agent-level raids with affinity polarization.
 - `crates/walrus-engine/src/evolution.rs`:
   - society actor model across abstract continents,
   - NK mutation/selection + sexual selection (mate-fitness-proportional reproduction),
@@ -136,7 +140,7 @@ This compares abstract continent layouts and isolation levels to study:
 
 ## Exploration Snapshots
 
-Generated from real scenario outputs (`make viz-report` + `node scripts/generate_snapshots.mjs`):
+Generated from real scenario outputs (`cargo run -p walrus-engine --example generate_timeline_csvs` + `node scripts/generate_snapshots.mjs`):
 
 ![Baseline snapshot](docs/assets/snapshot_baseline_default.svg)
 ![Ecological stress snapshot](docs/assets/snapshot_eco-stress_fragile.svg)
@@ -153,6 +157,16 @@ make system-feedback
 The engine supports explicit micro-agent interaction loops
 (cooperation/trade/conflict/migration + memory + demographic turnover)
 that roll up into macro emergence metrics.
+
+Each agent carries:
+- a functional **role** (Producer / Coordinator / Trader) with role-based interaction modifiers,
+- a 3D **affinity vector** driving oxytocin-modeled in-group bonding and out-group othering,
+- memory, trust, aggression, and status fields.
+
+Emergent dynamics include:
+- **Tribal clustering**: cooperating agents converge culturally; conflicting agents diverge, producing self-reinforcing cultural boundaries.
+- **Governance cycling**: adaptive policy shifts from laissez-faire (abundance) to redistributive (stress) to extractive (crisis), driven by a resource -> price pressure -> legitimacy erosion causal chain.
+- **Wars**: society-level wars (military strength, resource/population transfer, legitimacy shock) and agent-level raids (aggression-sorted raiding parties, resource seizure, affinity polarization).
 
 It also includes a society-level actor model with per-generation messages,
 geography constraints, and evolutionary adaptation.
