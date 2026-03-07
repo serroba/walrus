@@ -1,70 +1,29 @@
 use walrus_engine::{
-    run_named_scenario, scenario_ecological_stress, scenario_local_emergence_baseline,
-    LocalSocietyState, SubsistenceMode, TransitionConfig,
+    classify_trajectory, run_named_scenario, scenario_dense_coupled_growth,
+    scenario_ecological_stress, scenario_fragmented_low_coupling,
+    scenario_local_emergence_baseline, LocalSocietyState, TrajectoryClass, TransitionConfig,
 };
 
-fn dense_coupled_growth() -> Vec<LocalSocietyState> {
-    vec![
-        LocalSocietyState {
-            population: 220,
-            mode: SubsistenceMode::Sedentary,
-            surplus_per_capita: 0.45,
-            network_coupling: 0.65,
-            ecological_pressure: 0.12,
-        },
-        LocalSocietyState {
-            population: 650,
-            mode: SubsistenceMode::Sedentary,
-            surplus_per_capita: 0.55,
-            network_coupling: 0.78,
-            ecological_pressure: 0.15,
-        },
-        LocalSocietyState {
-            population: 1_100,
-            mode: SubsistenceMode::Agriculture,
-            surplus_per_capita: 0.62,
-            network_coupling: 0.82,
-            ecological_pressure: 0.2,
-        },
-    ]
-}
-
-fn fragmented_low_coupling() -> Vec<LocalSocietyState> {
-    vec![
-        LocalSocietyState {
-            population: 60,
-            mode: SubsistenceMode::HunterGatherer,
-            surplus_per_capita: 0.10,
-            network_coupling: 0.05,
-            ecological_pressure: 0.08,
-        },
-        LocalSocietyState {
-            population: 70,
-            mode: SubsistenceMode::HunterGatherer,
-            surplus_per_capita: 0.12,
-            network_coupling: 0.07,
-            ecological_pressure: 0.10,
-        },
-        LocalSocietyState {
-            population: 80,
-            mode: SubsistenceMode::HunterGatherer,
-            surplus_per_capita: 0.11,
-            network_coupling: 0.06,
-            ecological_pressure: 0.09,
-        },
-    ]
+fn class_label(class: TrajectoryClass) -> &'static str {
+    match class {
+        TrajectoryClass::StabilizingComplexity => "stabilizing",
+        TrajectoryClass::OvershootAndCorrection => "overshoot-correction",
+        TrajectoryClass::FragileTransition => "fragile-transition",
+        TrajectoryClass::StagnantLowComplexity => "stagnant-low-complexity",
+    }
 }
 
 fn print_header() {
     println!(
-        "scenario,start_SO,peak_SO,end_SO,start_CX,peak_CX,end_CX,peak_complex_societies,final_modes(H/S/A)",
+        "scenario,class,start_SO,peak_SO,end_SO,start_CX,peak_CX,end_CX,peak_complex_societies,final_modes(H/S/A)",
     );
 }
 
-fn print_row(name: &str, result: &walrus_engine::NamedSummary) {
+fn print_row(name: &str, result: &walrus_engine::NamedSummary, class: TrajectoryClass) {
     println!(
-        "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}/{}/{}",
+        "{},{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{}/{}/{}",
         name,
+        class_label(class),
         result.summary.start_superorganism,
         result.summary.peak_superorganism,
         result.summary.end_superorganism,
@@ -112,10 +71,14 @@ fn main() {
             scenario_ecological_stress(),
             fragile_cfg,
         ),
-        ("dense-coupled/default", dense_coupled_growth(), base_cfg),
+        (
+            "dense-coupled/default",
+            scenario_dense_coupled_growth(),
+            base_cfg,
+        ),
         (
             "fragmented-low-coupling/default",
-            fragmented_low_coupling(),
+            scenario_fragmented_low_coupling(),
             base_cfg,
         ),
     ];
@@ -123,6 +86,7 @@ fn main() {
     print_header();
     for (name, societies, cfg) in scenarios {
         let result = run_named_scenario(name, societies, ticks, cfg);
-        print_row(name, &result);
+        let class = classify_trajectory(result.summary);
+        print_row(name, &result, class);
     }
 }

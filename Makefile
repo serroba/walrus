@@ -1,4 +1,4 @@
-.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep
+.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report
 
 LLVM_COV_BIN := $(shell sh -c 'command -v llvm-cov 2>/dev/null || xcrun --find llvm-cov 2>/dev/null')
 LLVM_PROFDATA_BIN := $(shell sh -c 'command -v llvm-profdata 2>/dev/null || xcrun --find llvm-profdata 2>/dev/null')
@@ -35,3 +35,6 @@ system-feedback:
 
 sim-sweep:
 	cargo run -q -p walrus-engine --example sweep_scenarios
+
+viz-report:
+	cargo run -q -p walrus-engine --example visualization_report

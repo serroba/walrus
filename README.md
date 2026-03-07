@@ -38,6 +38,17 @@ cargo run -p walrus-engine --example emergence_run
 cargo run -p walrus-engine --example sweep_scenarios
 ```
 
+## Generate Public-Friendly Report
+
+```bash
+make viz-report
+```
+
+This writes:
+
+- `outputs/latest/report.md` (plain-language scenario summary)
+- `outputs/latest/timeline_*.csv` (time-series data for plotting)
+
 ## System Feedback Loop
 
 ```bash

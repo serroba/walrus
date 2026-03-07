@@ -111,6 +111,15 @@ pub struct NamedSummary {
     pub final_snapshot: EmergenceSnapshot,
 }
 
+/// High-level trajectory classes for non-technical interpretation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TrajectoryClass {
+    StabilizingComplexity,
+    OvershootAndCorrection,
+    FragileTransition,
+    StagnantLowComplexity,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -640,6 +649,29 @@ pub fn run_named_scenario(
     }
 }
 
+/// Classifies long-horizon behavior into a human-readable regime.
+#[must_use]
+pub fn classify_trajectory(summary: EmergenceSummary) -> TrajectoryClass {
+    let peak_gain = summary.peak_superorganism - summary.start_superorganism;
+    let correction = summary.peak_superorganism - summary.end_superorganism;
+    let stagnant = summary.peak_superorganism < 0.45
+        && summary.end_superorganism < 0.30
+        && summary.end_mean_complexity < 0.30;
+
+    if summary.end_superorganism >= 0.50
+        && summary.end_mean_complexity >= 0.45
+        && correction <= 0.10
+    {
+        TrajectoryClass::StabilizingComplexity
+    } else if stagnant {
+        TrajectoryClass::StagnantLowComplexity
+    } else if peak_gain >= 0.06 && correction >= 0.12 {
+        TrajectoryClass::OvershootAndCorrection
+    } else {
+        TrajectoryClass::FragileTransition
+    }
+}
+
 /// Baseline multi-society starting point for long-horizon emergence runs.
 #[must_use]
 pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
@@ -696,6 +728,62 @@ pub fn scenario_ecological_stress() -> Vec<LocalSocietyState> {
     ]
 }
 
+/// High-growth, tightly coupled initial condition.
+#[must_use]
+pub fn scenario_dense_coupled_growth() -> Vec<LocalSocietyState> {
+    vec![
+        LocalSocietyState {
+            population: 220,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.45,
+            network_coupling: 0.65,
+            ecological_pressure: 0.12,
+        },
+        LocalSocietyState {
+            population: 650,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.55,
+            network_coupling: 0.78,
+            ecological_pressure: 0.15,
+        },
+        LocalSocietyState {
+            population: 1_100,
+            mode: SubsistenceMode::Agriculture,
+            surplus_per_capita: 0.62,
+            network_coupling: 0.82,
+            ecological_pressure: 0.2,
+        },
+    ]
+}
+
+/// Low-coupling fragmented initial condition.
+#[must_use]
+pub fn scenario_fragmented_low_coupling() -> Vec<LocalSocietyState> {
+    vec![
+        LocalSocietyState {
+            population: 60,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.10,
+            network_coupling: 0.05,
+            ecological_pressure: 0.08,
+        },
+        LocalSocietyState {
+            population: 70,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.12,
+            network_coupling: 0.07,
+            ecological_pressure: 0.10,
+        },
+        LocalSocietyState {
+            population: 80,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.11,
+            network_coupling: 0.06,
+            ecological_pressure: 0.09,
+        },
+    ]
+}
+
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
@@ -703,11 +791,13 @@ fn clamp01(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_from_local_societies, emergence_order_parameters, emergent_dynamics,
-        group_behavior_profile, local_complexity, next_subsistence_mode, run_emergence_simulation,
-        scenario_ecological_stress, scenario_local_emergence_baseline, step_local_society,
+        aggregate_from_local_societies, classify_trajectory, emergence_order_parameters,
+        emergent_dynamics, group_behavior_profile, local_complexity, next_subsistence_mode,
+        run_emergence_simulation, scenario_dense_coupled_growth, scenario_ecological_stress,
+        scenario_fragmented_low_coupling, scenario_local_emergence_baseline, step_local_society,
         summarize_emergence, AgentState, EmergenceOrderParameters, LocalSocietyState,
-        SimulationConfig, SimulationEngine, SubsistenceMode, TransitionConfig, WorldState,
+        SimulationConfig, SimulationEngine, SubsistenceMode, TrajectoryClass, TransitionConfig,
+        WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -952,7 +1042,39 @@ mod tests {
     fn scenario_builders_produce_non_empty_societies() {
         let baseline = scenario_local_emergence_baseline();
         let stress = scenario_ecological_stress();
+        let dense = scenario_dense_coupled_growth();
+        let fragmented = scenario_fragmented_low_coupling();
         assert!(!baseline.is_empty());
         assert!(!stress.is_empty());
+        assert!(!dense.is_empty());
+        assert!(!fragmented.is_empty());
+    }
+
+    #[test]
+    fn classify_stagnant_low_complexity_trajectory() {
+        let class = classify_trajectory(super::EmergenceSummary {
+            start_superorganism: 0.28,
+            end_superorganism: 0.22,
+            peak_superorganism: 0.35,
+            start_mean_complexity: 0.30,
+            end_mean_complexity: 0.21,
+            peak_mean_complexity: 0.34,
+            peak_complex_societies: 0,
+        });
+        assert_eq!(class, TrajectoryClass::StagnantLowComplexity);
+    }
+
+    #[test]
+    fn classify_overshoot_and_correction_trajectory() {
+        let class = classify_trajectory(super::EmergenceSummary {
+            start_superorganism: 0.50,
+            end_superorganism: 0.34,
+            peak_superorganism: 0.72,
+            start_mean_complexity: 0.55,
+            end_mean_complexity: 0.33,
+            peak_mean_complexity: 0.80,
+            peak_complex_societies: 3,
+        });
+        assert_eq!(class, TrajectoryClass::OvershootAndCorrection);
     }
 }
