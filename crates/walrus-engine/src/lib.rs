@@ -1077,8 +1077,8 @@ pub fn seed_micro_agents(count: usize, mode: SubsistenceMode) -> Vec<MicroAgent>
             let skew = ((i % 7) as f64) / 30.0;
             // Role distribution: ~70% Producer, ~15% Coordinator, ~15% Trader
             let role = match i % 20 {
-                0 | 1 | 2 => AgentRole::Coordinator,
-                3 | 4 | 5 => AgentRole::Trader,
+                0..=2 => AgentRole::Coordinator,
+                3..=5 => AgentRole::Trader,
                 _ => AgentRole::Producer,
             };
             // Role modifiers: coordinators have higher cooperation/lower aggression,
