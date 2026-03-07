@@ -22,6 +22,14 @@ All PRs must pass:
 - Exclusions should be rare and justified (for generated code, glue code, or infrastructure wrappers with low test value).
 - Any change to core model behavior must include or update tests.
 
+## Developer Feedback Loop
+
+Use fast, repeated quality loops while implementing:
+
+1. `make check` after each logical change.
+2. `make coverage-engine` before commit for model-core edits.
+3. `make feedback-loop` before push.
+
 ## Commit Frequency
 
 Prefer small, regular commits aligned to one logical change.

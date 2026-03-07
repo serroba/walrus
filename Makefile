@@ -1,4 +1,4 @@
-.PHONY: fmt lint test coverage coverage-engine coverage-workspace check
+.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop
 
 fmt:
 	cargo fmt --all
@@ -21,3 +21,7 @@ check:
 	cargo fmt --all -- --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace --all-targets
+
+feedback-loop:
+	$(MAKE) check
+	$(MAKE) coverage-engine

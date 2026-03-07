@@ -20,6 +20,7 @@ Ship a minimal agent-based simulator demonstrating macro emergence from micro ru
 3. Core dashboards (CLI plots + exported notebook template).
 4. Calibration stubs with documented priors.
 5. Emergence telemetry: throughput pressure, centralization, policy lock-in, autonomy loss, superorganism index.
+6. Dynamic transition runner: local societies evolve over time with mode switching and ecological balancing feedback.
 
 ## Acceptance Criteria
 
