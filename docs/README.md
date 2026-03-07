@@ -15,6 +15,17 @@ This folder defines the foundation and execution plans for an open-source, high-
 4. Performance portability: laptop-first, cluster-ready architecture.
 5. Open science: transparent equations, uncertainty ranges, and validation protocol.
 
+## Current Modeling Style
+
+1. Assumptions-first and replaceable:
+- thresholds, topologies, feedbacks, and calibration objectives are explicit and configurable.
+2. Actor + system coupling:
+- micro actor dynamics produce macro emergence and collapse signatures.
+3. Geography and isolation experiments:
+- abstract continent layouts are used to test convergence vs divergence.
+4. Social scaling realism:
+- Dunbar effects are represented as behavioral constraints, not only fixed boundaries.
+
 ## Immediate Next Step
 
 Start with [`foundations/01_scope-and-goals.md`](./foundations/01_scope-and-goals.md), then implement `plans/01_project-bootstrap.md` and `plans/02_mvp-simulator.md`.

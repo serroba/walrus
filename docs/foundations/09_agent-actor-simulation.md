@@ -99,3 +99,6 @@ Use the terminal UI to watch agent interactions directly:
 5. `WorldMap` (abstract geography layer):
    - configurable continental layouts (`Connected`, `Regional`, `Islands`),
    - tunable `isolation_factor` to test diffusion/isolation constraints.
+6. `DunbarBehaviorModel` (social constraints):
+   - configurable thresholds,
+   - expectation load, trust decay, communication cost, coordination gain by scale.

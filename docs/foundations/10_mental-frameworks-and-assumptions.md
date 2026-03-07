@@ -14,7 +14,12 @@ The objective is to test classes of behavior:
 
 1. **Dunbar numbers (social scaling):**
 - social structure changes as population scales through layers (`5, 15, 50, 150, 500, 1500`).
-- model impact: group-scale bonus and mode transitions are population-conditioned.
+- model impact: scaling is modeled as a behavior profile, not only hard thresholds:
+  - expectation load rises with scale,
+  - trust decay pressure rises with scale,
+  - communication costs rise with scale,
+  - coordination gains also rise with scale.
+- thresholds are configurable to test alternative social scaling assumptions.
 
 2. **Jared Diamond-style geography constraints:**
 - complexity growth depends on geography and biophysical opportunity, not culture alone.

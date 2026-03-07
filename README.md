@@ -8,6 +8,22 @@ Current modeling objective: capture how behavior shifts with group size and hist
 - Engine core: Rust (performance, safety, scalability)
 - Analysis/orchestration: optional Python layer later (via `uv`)
 
+## Current Architecture
+
+- `crates/walrus-engine/src/lib.rs`:
+  - core stock-flow and agent-based interaction engine,
+  - micro->macro projection and superorganism metrics.
+- `crates/walrus-engine/src/evolution.rs`:
+  - society actor model across abstract continents,
+  - NK mutation/selection over generations,
+  - Dunbar behavioral constraints (trust, communication, expectation),
+  - configurable isolation/diffusion topology.
+- `crates/walrus-engine/src/calibration.rs`:
+  - OWID/Maddison/HANDY-compatible ingestion,
+  - stylized-fact calibration objective.
+- `crates/walrus-engine/src/ensemble.rs`:
+  - uncertainty bands and robustness summaries.
+
 ## Quality Gates
 
 - Format: `cargo fmt --all -- --check`
@@ -80,7 +96,7 @@ make evolution-run
 
 This runs multi-generation actor evolution with:
 
-- Dunbar-scale social transitions,
+- Dunbar behavior transitions (thresholds + trust/communication/expectation shifts),
 - NK fitness + mutation over generations,
 - continent-level energy/resource constraints,
 - local emergence and collapse cycles.

@@ -1,4 +1,6 @@
-use walrus_engine::evolution::{simulate_evolution, ContinentalLayout, EvolutionConfig};
+use walrus_engine::evolution::{
+    simulate_evolution, ContinentalLayout, DunbarBehaviorModel, EvolutionConfig,
+};
 
 fn main() {
     let result = simulate_evolution(EvolutionConfig {
@@ -9,6 +11,7 @@ fn main() {
         nk_k: 3,
         layout: ContinentalLayout::Regional,
         isolation_factor: 0.35,
+        dunbar_model: DunbarBehaviorModel::default(),
     });
 
     println!(

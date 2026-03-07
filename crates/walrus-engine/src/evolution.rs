@@ -14,16 +14,76 @@ pub enum GroupScale {
     Civilizational,
 }
 
+/// Behavioral parameters that shift as social scale increases.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DunbarLayerBehavior {
+    pub expectation_load: f64,
+    pub trust_decay: f64,
+    pub communication_cost: f64,
+    pub coordination_gain: f64,
+}
+
+/// Configurable Dunbar model with thresholds and behavior profiles.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DunbarBehaviorModel {
+    pub thresholds: [u32; 6],
+    pub expectation_load: [f64; 6],
+    pub trust_decay: [f64; 6],
+    pub communication_cost: [f64; 6],
+    pub coordination_gain: [f64; 6],
+}
+
+impl Default for DunbarBehaviorModel {
+    fn default() -> Self {
+        Self {
+            thresholds: DUNBAR_NUMBERS,
+            expectation_load: [0.06, 0.09, 0.13, 0.20, 0.31, 0.42],
+            trust_decay: [0.010, 0.014, 0.018, 0.024, 0.030, 0.038],
+            communication_cost: [0.01, 0.02, 0.04, 0.07, 0.12, 0.18],
+            coordination_gain: [0.02, 0.04, 0.08, 0.13, 0.19, 0.24],
+        }
+    }
+}
+
 /// Returns a Dunbar-inspired social layer for a given population size.
 #[must_use]
 pub fn dunbar_group_scale(population: u32) -> GroupScale {
-    match population {
-        0..=5 => GroupScale::Intimate,
-        6..=15 => GroupScale::Sympathy,
-        16..=50 => GroupScale::Band,
-        51..=150 => GroupScale::Village,
-        151..=500 => GroupScale::Polity,
-        _ => GroupScale::Civilizational,
+    dunbar_group_scale_with_thresholds(population, DUNBAR_NUMBERS)
+}
+
+/// Returns social layer for custom threshold sets.
+#[must_use]
+pub fn dunbar_group_scale_with_thresholds(population: u32, thresholds: [u32; 6]) -> GroupScale {
+    if population <= thresholds[0] {
+        GroupScale::Intimate
+    } else if population <= thresholds[1] {
+        GroupScale::Sympathy
+    } else if population <= thresholds[2] {
+        GroupScale::Band
+    } else if population <= thresholds[3] {
+        GroupScale::Village
+    } else if population <= thresholds[4] {
+        GroupScale::Polity
+    } else {
+        GroupScale::Civilizational
+    }
+}
+
+#[must_use]
+pub fn dunbar_behavior(population: u32, model: DunbarBehaviorModel) -> DunbarLayerBehavior {
+    let idx = match dunbar_group_scale_with_thresholds(population, model.thresholds) {
+        GroupScale::Intimate => 0,
+        GroupScale::Sympathy => 1,
+        GroupScale::Band => 2,
+        GroupScale::Village => 3,
+        GroupScale::Polity => 4,
+        GroupScale::Civilizational => 5,
+    };
+    DunbarLayerBehavior {
+        expectation_load: model.expectation_load[idx],
+        trust_decay: model.trust_decay[idx],
+        communication_cost: model.communication_cost[idx],
+        coordination_gain: model.coordination_gain[idx],
     }
 }
 
@@ -294,6 +354,7 @@ pub struct EvolutionConfig {
     pub layout: ContinentalLayout,
     /// 0 = open diffusion, 1 = fully isolated corridors.
     pub isolation_factor: f64,
+    pub dunbar_model: DunbarBehaviorModel,
 }
 
 impl Default for EvolutionConfig {
@@ -306,6 +367,7 @@ impl Default for EvolutionConfig {
             nk_k: 3,
             layout: ContinentalLayout::Regional,
             isolation_factor: 0.35,
+            dunbar_model: DunbarBehaviorModel::default(),
         }
     }
 }
@@ -367,23 +429,18 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
                     + 0.22 * continent.diffusion_access)
                     .clamp(0.0, 2.0);
 
-            let scale = dunbar_group_scale(society.population);
-            let scale_bonus = match scale {
-                GroupScale::Intimate => 0.02,
-                GroupScale::Sympathy => 0.04,
-                GroupScale::Band => 0.08,
-                GroupScale::Village => 0.12,
-                GroupScale::Polity => 0.18,
-                GroupScale::Civilizational => 0.24,
-            };
+            let layer = dunbar_behavior(society.population, config.dunbar_model);
 
             let innovation =
-                (0.48 * nk_fit + 0.27 * continent.diffusion_access + scale_bonus).clamp(0.0, 1.4);
+                (0.48 * nk_fit + 0.27 * continent.diffusion_access + layer.coordination_gain)
+                    .clamp(0.0, 1.4);
             let complexity_gain =
                 (0.20 * energy_access + 0.24 * innovation + 0.08 * society.trust).clamp(0.0, 1.0);
             let maintenance = (0.06
                 + 0.16 * society.complexity
                 + 0.10 * society.complexity.powi(2)
+                + layer.communication_cost
+                + 0.5 * layer.expectation_load
                 + 0.08 * state.depletion)
                 .clamp(0.0, 2.0);
 
@@ -398,8 +455,11 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
             };
             society.resilience =
                 (society.resilience + 0.04 * innovation - 0.05 * stress_shock).clamp(0.05, 1.3);
-            society.trust =
-                (society.trust + 0.03 * innovation - 0.04 * stress_shock).clamp(0.0, 1.0);
+            society.trust = (society.trust + 0.03 * innovation
+                - 0.04 * stress_shock
+                - layer.trust_decay
+                - 0.02 * layer.expectation_load)
+                .clamp(0.0, 1.0);
 
             let growth = (0.012 * society.surplus + 0.010 * society.resilience
                 - 0.008 * stress_shock)
@@ -725,8 +785,9 @@ fn rand01(state: &mut u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_actor_messages, dunbar_group_scale, simulate_evolution, ActorMessage,
-        ContinentalLayout, EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor,
+        apply_actor_messages, dunbar_behavior, dunbar_group_scale,
+        dunbar_group_scale_with_thresholds, simulate_evolution, ActorMessage, ContinentalLayout,
+        DunbarBehaviorModel, EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor,
         WorldMap,
     };
     use crate::SubsistenceMode;
@@ -739,6 +800,29 @@ mod tests {
         assert_eq!(dunbar_group_scale(150), GroupScale::Village);
         assert_eq!(dunbar_group_scale(500), GroupScale::Polity);
         assert_eq!(dunbar_group_scale(1_501), GroupScale::Civilizational);
+    }
+
+    #[test]
+    fn custom_dunbar_thresholds_shift_scale_boundaries() {
+        let custom = [8, 20, 70, 210, 700, 2_000];
+        assert_eq!(
+            dunbar_group_scale_with_thresholds(150, custom),
+            GroupScale::Village
+        );
+        assert_eq!(
+            dunbar_group_scale_with_thresholds(650, custom),
+            GroupScale::Polity
+        );
+    }
+
+    #[test]
+    fn dunbar_behavior_increases_coordination_and_costs_with_scale() {
+        let model = DunbarBehaviorModel::default();
+        let small = dunbar_behavior(20, model);
+        let large = dunbar_behavior(1_800, model);
+        assert!(large.coordination_gain > small.coordination_gain);
+        assert!(large.communication_cost > small.communication_cost);
+        assert!(large.trust_decay > small.trust_decay);
     }
 
     #[test]
@@ -776,6 +860,7 @@ mod tests {
             nk_k: 3,
             layout: ContinentalLayout::Regional,
             isolation_factor: 0.35,
+            dunbar_model: DunbarBehaviorModel::default(),
         });
 
         assert!(!result.snapshots.is_empty());

@@ -1,4 +1,6 @@
-use walrus_engine::evolution::{simulate_evolution, ContinentalLayout, EvolutionConfig};
+use walrus_engine::evolution::{
+    simulate_evolution, ContinentalLayout, DunbarBehaviorModel, EvolutionConfig,
+};
 
 fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
     let result = simulate_evolution(EvolutionConfig {
@@ -9,6 +11,7 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
         nk_k: 3,
         layout,
         isolation_factor,
+        dunbar_model: DunbarBehaviorModel::default(),
     });
 
     let collapse_total = result
