@@ -23,6 +23,8 @@ Status:
 2. Internal test/quality discipline: **Good**
 3. Empirical/historical calibration: **Missing**
 4. Macro stock-flow integration (World3 layer): **Missing**
+5. Game-theoretic equilibrium diagnostics (Nash/Moloch): **Missing**
+6. Superorganism inevitability testing protocol: **Missing**
 
 ## Assumption-to-Implementation Matrix
 
@@ -47,6 +49,12 @@ Status:
 7. Historical trajectory plausibility across millennia:
    - Status: **Not validated**
    - Gap: no calibration against historical data, no uncertainty envelope.
+8. Explicit game-theoretic equilibrium structure and diagnostics:
+   - Status: **Not implemented**
+   - Gap: no payoff matrix abstractions, no repeated-game equilibrium classification, no Nash stability score.
+9. Superorganism inevitability hypothesis testing:
+   - Status: **Not implemented**
+   - Gap: no formal criteria for inevitability vs contingency across parameter/game sweeps.
 
 ## Why This Is Not Yet "Meaningful Enough"
 
@@ -83,6 +91,8 @@ Remaining clarity gaps:
 3. Implement first macro stock-flow module (resource + pollution + productivity delay).
 4. Add event markers to timelines (mode transitions, ecological threshold crossings).
 5. Add a public-facing "Model Maturity" panel in the standalone viewer.
+6. Implement game-theory layer with payoff structures and equilibrium metrics.
+7. Add inevitability report: fraction of runs converging to stable superorganism equilibria under varied incentive regimes.
 
 ## Bottom Line
 
