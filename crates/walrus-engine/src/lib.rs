@@ -1,5 +1,6 @@
 //! Deterministic, explicit stock-flow simulator core.
 
+pub mod agents;
 pub mod calibration;
 pub mod ensemble;
 pub mod evolution;

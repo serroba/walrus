@@ -1,4 +1,4 @@
-.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report viz-app tui-life calibration-loop evolution-run evolution-sweep convergence-experiment
+.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report viz-app tui-life calibration-loop evolution-run evolution-sweep convergence-experiment agent-sim
 
 LLVM_COV_BIN := $(shell sh -c 'command -v llvm-cov 2>/dev/null || xcrun --find llvm-cov 2>/dev/null')
 LLVM_PROFDATA_BIN := $(shell sh -c 'command -v llvm-profdata 2>/dev/null || xcrun --find llvm-profdata 2>/dev/null')
@@ -58,3 +58,6 @@ evolution-sweep:
 
 convergence-experiment:
 	cargo run -q --release -p walrus-engine --example convergence_experiment
+
+agent-sim:
+	cargo run -q --release -p walrus-engine --example agent_simulation
