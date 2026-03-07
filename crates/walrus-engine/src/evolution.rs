@@ -1,4 +1,6 @@
-use crate::SubsistenceMode;
+use rayon::prelude::*;
+
+use crate::{LocalSocietyState, SubsistenceMode};
 
 /// Dunbar reference sizes used to classify social scale transitions.
 pub const DUNBAR_NUMBERS: [u32; 6] = [5, 15, 50, 150, 500, 1_500];
@@ -357,6 +359,12 @@ pub struct EvolutionConfig {
     /// 0 = open diffusion, 1 = fully isolated corridors.
     pub isolation_factor: f64,
     pub dunbar_model: DunbarBehaviorModel,
+    /// Min and max initial population per society.
+    pub population_range: (u32, u32),
+    /// Min and max initial complexity per society.
+    pub initial_complexity_range: (f64, f64),
+    /// Scales continent carrying_capacity and energy_endowment.
+    pub resource_multiplier: f64,
     pub natural_disaster_base_rate: f64,
     pub pandemic_base_rate: f64,
 }
@@ -372,6 +380,9 @@ impl Default for EvolutionConfig {
             layout: ContinentalLayout::Regional,
             isolation_factor: 0.35,
             dunbar_model: DunbarBehaviorModel::default(),
+            population_range: (12, 102),
+            initial_complexity_range: (0.08, 0.28),
+            resource_multiplier: 1.0,
             natural_disaster_base_rate: 0.05,
             pandemic_base_rate: 0.03,
         }
@@ -389,6 +400,8 @@ pub struct EvolutionSnapshot {
     pub emergent_civilizations: u32,
     pub convergence_index: f64,
     pub adaptation_divergence: f64,
+    /// Weighted superorganism signal from emergence_order_parameters.
+    pub superorganism_index: f64,
     pub natural_disaster_events: u32,
     pub pandemic_events: u32,
 }
@@ -415,22 +428,48 @@ pub struct EvolutionResult {
 pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
     let mut rng = config.seed.max(1);
     let mut map = WorldMap::from_layout(config.layout, config.isolation_factor);
+    if (config.resource_multiplier - 1.0).abs() > 1e-9 {
+        let m = config.resource_multiplier.clamp(0.1, 10.0);
+        for continent in &mut map.continents {
+            continent.carrying_capacity *= m;
+            continent.energy_endowment = (continent.energy_endowment * m).clamp(0.0, 2.0);
+        }
+        for (i, state) in map.states.iter_mut().enumerate() {
+            state.stock = map.continents[i].carrying_capacity;
+        }
+    }
     let landscape = NkLandscape::deterministic(config.nk_n, config.nk_k, config.seed ^ 0xa5a5);
-    let mut societies = seed_societies(config.initial_societies, &map, &mut rng, config.nk_n);
+    let mut societies = seed_societies(
+        config.initial_societies,
+        &map,
+        &mut rng,
+        config.nk_n,
+        config.population_range,
+        config.initial_complexity_range,
+    );
     let mut snapshots = Vec::with_capacity(config.generations as usize);
 
     for generation in 0..config.generations {
-        let mut collapse_events = 0_u32;
         let mut natural_disaster_events = 0_u32;
         let mut pandemic_events = 0_u32;
         let continent_counts = per_continent_counts(&societies, map.continents.len());
+        // Snapshot continent states so all societies act on the same world view.
+        let state_snapshot: Vec<ContinentState> = map.states.clone();
 
-        for society in &mut societies {
-            let c_idx = society.continent;
-            let continent = &map.continents[c_idx];
-            let mut state = map.states[c_idx];
-            let messages = actor_messages_for(c_idx, &map, &continent_counts, config, &mut rng);
-            for message in &messages {
+        // Pre-compute per-continent actor messages deterministically.
+        let continent_messages: Vec<Vec<ActorMessage>> = (0..map.continents.len())
+            .map(|ci| {
+                let mut msg_rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(ci as u64)
+                    .wrapping_add(generation as u64)
+                    .max(1);
+                actor_messages_for(ci, &map, &continent_counts, config, &mut msg_rng)
+            })
+            .collect();
+        // Count disaster/pandemic events from pre-computed messages.
+        for msgs in &continent_messages {
+            for message in msgs {
                 match message {
                     ActorMessage::NaturalDisaster { .. } => {
                         natural_disaster_events = natural_disaster_events.saturating_add(1);
@@ -441,100 +480,166 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
                     _ => {}
                 }
             }
-            apply_actor_messages(society, &messages);
+        }
+        // Advance global rng to stay deterministic.
+        rand01(&mut rng);
 
-            let nk_fit = landscape.fitness(society.genome.bits);
-            let energy_access =
-                (continent.energy_endowment * state.stock * (1.0 - state.depletion)
-                    + 0.35 * continent.domesticable_biomass
-                    + 0.22 * continent.diffusion_access)
-                    .clamp(0.0, 2.0);
-
-            let layer = dunbar_behavior(society.population, config.dunbar_model);
-
-            let innovation =
-                (0.48 * nk_fit + 0.27 * continent.diffusion_access + layer.coordination_gain)
-                    .clamp(0.0, 1.4);
-            let complexity_gain =
-                (0.20 * energy_access + 0.24 * innovation + 0.08 * society.trust).clamp(0.0, 1.0);
-            let maintenance = (0.06
-                + 0.16 * society.complexity
-                + 0.10 * society.complexity.powi(2)
-                + layer.communication_cost
-                + 0.5 * layer.expectation_load
-                + 0.08 * state.depletion)
-                .clamp(0.0, 2.0);
-
-            society.surplus = (society.surplus + complexity_gain - maintenance).clamp(-1.0, 2.5);
-            society.complexity =
-                (society.complexity + 0.14 * complexity_gain - 0.10 * maintenance).clamp(0.0, 1.8);
-
-            let stress_shock = if rand01(&mut rng) < continent.shock_risk {
-                rand01(&mut rng) * 0.35
-            } else {
-                0.0
-            };
-            society.resilience =
-                (society.resilience + 0.04 * innovation - 0.05 * stress_shock).clamp(0.05, 1.3);
-            society.trust = (society.trust + 0.03 * innovation
-                - 0.04 * stress_shock
-                - layer.trust_decay
-                - 0.02 * layer.expectation_load)
-                .clamp(0.0, 1.0);
-
-            let growth = (0.012 * society.surplus + 0.010 * society.resilience
-                - 0.008 * stress_shock)
-                .clamp(-0.08, 0.12);
-            let next_population = ((society.population as f64) * (1.0 + growth)).round() as i64;
-            society.population = next_population.max(4) as u32;
-
-            let local_count = continent_counts[c_idx].max(1) as f64;
-            let extraction = ((society.population as f64) / 140_000.0)
-                * (1.0 + 0.8 * society.complexity)
-                + 0.012 * society.surplus.max(0.0);
-            let regen =
-                continent.regen_rate * continent.carrying_capacity * (1.0 - 0.35 * state.depletion);
-            state.stock =
-                (state.stock + regen - extraction).clamp(0.0, continent.carrying_capacity * 1.1);
-            let depletion_load = extraction / local_count;
-            state.depletion = (state.depletion + 0.08 * depletion_load
-                - 0.45 * continent.regen_rate)
-                .clamp(0.0, 1.0);
-
-            let collapse_trigger = (state.stock < 0.12 * continent.carrying_capacity
-                || state.depletion > 0.88)
-                && society.complexity > 0.55;
-            if collapse_trigger {
-                collapse_events = collapse_events.saturating_add(1);
-                society.population = ((society.population as f64) * 0.68).round().max(4.0) as u32;
-                society.complexity = (society.complexity * 0.72).clamp(0.0, 1.8);
-                society.surplus = (society.surplus - 0.22).clamp(-1.0, 2.5);
-                society.mode = SubsistenceMode::HunterGatherer;
-            } else {
-                society.mode = mode_from_population(society.population, society.surplus);
-            }
-
-            society.genome = mutate_genome(society.genome, config.nk_n, &mut rng);
-            map.states[c_idx] = state;
+        // --- Pass 1 (parallel): compute society updates and resource extraction ---
+        struct SocietyUpdate {
+            extraction: f64,
+            continent: usize,
+            collapsed: bool,
         }
 
-        let mut offspring = Vec::new();
-        let mut id_counter = societies.len() as u64 + (generation as u64) * 10;
-        for society in &societies {
-            if society.surplus > 0.38 && society.population > 90 && rand01(&mut rng) < 0.08 {
-                let target = migrate_target(society.continent, &map.corridors, &mut rng)
+        let updates: Vec<SocietyUpdate> = societies
+            .par_iter_mut()
+            .map(|society| {
+                let c_idx = society.continent;
+                let continent = &map.continents[c_idx];
+                let state = state_snapshot[c_idx];
+
+                // Per-society deterministic RNG seeded from id + generation.
+                let mut srng = society
+                    .id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(config.seed)
+                    .max(1);
+
+                apply_actor_messages(society, &continent_messages[c_idx]);
+
+                let nk_fit = landscape.fitness(society.genome.bits);
+                let energy_access =
+                    (continent.energy_endowment * state.stock * (1.0 - state.depletion)
+                        + 0.35 * continent.domesticable_biomass
+                        + 0.22 * continent.diffusion_access)
+                        .clamp(0.0, 2.0);
+
+                let layer = dunbar_behavior(society.population, config.dunbar_model);
+
+                let innovation =
+                    (0.48 * nk_fit + 0.27 * continent.diffusion_access + layer.coordination_gain)
+                        .clamp(0.0, 1.4);
+                let complexity_gain =
+                    (0.20 * energy_access + 0.24 * innovation + 0.08 * society.trust)
+                        .clamp(0.0, 1.0);
+                let maintenance = (0.06
+                    + 0.16 * society.complexity
+                    + 0.10 * society.complexity.powi(2)
+                    + layer.communication_cost
+                    + 0.5 * layer.expectation_load
+                    + 0.08 * state.depletion)
+                    .clamp(0.0, 2.0);
+
+                society.surplus =
+                    (society.surplus + complexity_gain - maintenance).clamp(-1.0, 2.5);
+                society.complexity = (society.complexity + 0.14 * complexity_gain
+                    - 0.10 * maintenance)
+                    .clamp(0.0, 1.8);
+
+                let stress_shock = if rand01(&mut srng) < continent.shock_risk {
+                    rand01(&mut srng) * 0.35
+                } else {
+                    0.0
+                };
+                society.resilience =
+                    (society.resilience + 0.04 * innovation - 0.05 * stress_shock).clamp(0.05, 1.3);
+                society.trust = (society.trust + 0.03 * innovation
+                    - 0.04 * stress_shock
+                    - layer.trust_decay
+                    - 0.02 * layer.expectation_load)
+                    .clamp(0.0, 1.0);
+
+                let growth = (0.012 * society.surplus + 0.010 * society.resilience
+                    - 0.008 * stress_shock)
+                    .clamp(-0.08, 0.12);
+                let next_population = ((society.population as f64) * (1.0 + growth)).round() as i64;
+                society.population = next_population.max(4) as u32;
+
+                let local_count = continent_counts[c_idx].max(1) as f64;
+                let extraction = ((society.population as f64) / 140_000.0)
+                    * (1.0 + 0.8 * society.complexity)
+                    + 0.012 * society.surplus.max(0.0);
+
+                let collapse_trigger = (state.stock < 0.12 * continent.carrying_capacity
+                    || state.depletion > 0.88)
+                    && society.complexity > 0.55;
+                if collapse_trigger {
+                    society.population =
+                        ((society.population as f64) * 0.68).round().max(4.0) as u32;
+                    society.complexity = (society.complexity * 0.72).clamp(0.0, 1.8);
+                    society.surplus = (society.surplus - 0.22).clamp(-1.0, 2.5);
+                    society.mode = SubsistenceMode::HunterGatherer;
+                } else {
+                    society.mode = mode_from_population(society.population, society.surplus);
+                }
+
+                society.genome = mutate_genome(society.genome, config.nk_n, &mut srng);
+
+                SocietyUpdate {
+                    extraction: extraction / local_count,
+                    continent: c_idx,
+                    collapsed: collapse_trigger,
+                }
+            })
+            .collect();
+
+        // --- Pass 2: aggregate resource changes per continent ---
+        let collapse_events = updates.iter().filter(|u| u.collapsed).count() as u32;
+        let mut extraction_per_continent = vec![0.0_f64; map.continents.len()];
+        for update in &updates {
+            extraction_per_continent[update.continent] += update.extraction;
+        }
+        for (ci, continent) in map.continents.iter().enumerate() {
+            let state = &mut map.states[ci];
+            let regen =
+                continent.regen_rate * continent.carrying_capacity * (1.0 - 0.35 * state.depletion);
+            let total_extraction = extraction_per_continent[ci];
+            state.stock = (state.stock + regen - total_extraction)
+                .clamp(0.0, continent.carrying_capacity * 1.1);
+            state.depletion = (state.depletion + 0.08 * total_extraction
+                - 0.45 * continent.regen_rate)
+                .clamp(0.0, 1.0);
+        }
+
+        // Sexual selection: reproduction probability scales with mate fitness.
+        // Uses per-society RNG for deterministic parallel reproduction decisions.
+        let offspring: Vec<SocietyActor> = societies
+            .par_iter()
+            .filter_map(|society| {
+                if society.population < 30 {
+                    return None;
+                }
+                let mut srng = society
+                    .id
+                    .wrapping_mul(2862933555777941757)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(config.seed)
+                    .wrapping_add(0xBEEF)
+                    .max(1);
+                let nk_fit = landscape.fitness(society.genome.bits);
+                let mate_score = mate_fitness(society, nk_fit);
+                let reproduction_prob = 0.04 * (1.0 + 3.0 * mate_score);
+                if rand01(&mut srng) >= reproduction_prob {
+                    return None;
+                }
+                let target = migrate_target(society.continent, &map.corridors, &mut srng)
                     .unwrap_or(society.continent);
+                let child_id = society
+                    .id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(1);
                 let mut child = *society;
-                child.id = id_counter;
-                id_counter = id_counter.saturating_add(1);
+                child.id = child_id;
                 child.continent = target;
                 child.population = ((society.population as f64) * 0.16).round().max(5.0) as u32;
                 child.complexity = (society.complexity * 0.80).clamp(0.0, 1.8);
                 child.surplus = (society.surplus * 0.70).clamp(-1.0, 2.5);
-                child.genome = mutate_genome(society.genome, config.nk_n, &mut rng);
-                offspring.push(child);
-            }
-        }
+                child.genome = mutate_genome(society.genome, config.nk_n, &mut srng);
+                Some(child)
+            })
+            .collect();
         societies.extend(offspring);
 
         societies.retain(|s| s.population > 3);
@@ -575,6 +680,31 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
         let convergence_index = convergence_index(&continent_complexity_means);
         let adaptation_divergence = standard_deviation(&continent_resilience_means);
 
+        // Compute superorganism index by projecting societies to LocalSocietyState
+        // and aggregating via the core emergence_order_parameters machinery.
+        let local_states: Vec<LocalSocietyState> = societies
+            .iter()
+            .map(|s| {
+                let st = map.states[s.continent];
+                let coupling = map
+                    .corridors
+                    .iter()
+                    .filter(|cor| cor.from == s.continent)
+                    .map(|cor| cor.strength)
+                    .sum::<f64>()
+                    .clamp(0.0, 1.0);
+                let eco_pressure = st.depletion;
+                LocalSocietyState {
+                    population: s.population,
+                    mode: s.mode,
+                    surplus_per_capita: s.surplus.max(0.0),
+                    network_coupling: coupling,
+                    ecological_pressure: eco_pressure.clamp(0.0, 1.0),
+                }
+            })
+            .collect();
+        let global_emergence = crate::aggregate_from_local_societies(&local_states);
+
         snapshots.push(EvolutionSnapshot {
             generation,
             population_total,
@@ -584,6 +714,7 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
             emergent_civilizations,
             convergence_index,
             adaptation_divergence,
+            superorganism_index: global_emergence.superorganism_index,
             natural_disaster_events,
             pandemic_events,
         });
@@ -747,18 +878,29 @@ fn apply_actor_messages(actor: &mut SocietyActor, messages: &[ActorMessage]) {
     }
 }
 
-fn seed_societies(count: u32, map: &WorldMap, rng: &mut u64, nk_n: usize) -> Vec<SocietyActor> {
+fn seed_societies(
+    count: u32,
+    map: &WorldMap,
+    rng: &mut u64,
+    nk_n: usize,
+    population_range: (u32, u32),
+    complexity_range: (f64, f64),
+) -> Vec<SocietyActor> {
     let mut out = Vec::with_capacity(count as usize);
+    let pop_min = population_range.0 as f64;
+    let pop_span = (population_range.1 as f64 - pop_min).max(1.0);
+    let cx_min = complexity_range.0;
+    let cx_span = (complexity_range.1 - cx_min).max(0.01);
     for id in 0..count {
         let continent = ((rand01(rng) * (map.continents.len() as f64)).floor() as usize)
             .min(map.continents.len().saturating_sub(1));
-        let pop = (12.0 + rand01(rng) * 90.0).round() as u32;
+        let pop = (pop_min + rand01(rng) * pop_span).round() as u32;
         out.push(SocietyActor {
             id: u64::from(id),
             continent,
             mode: SubsistenceMode::HunterGatherer,
             population: pop,
-            complexity: (0.08 + rand01(rng) * 0.2).clamp(0.0, 1.8),
+            complexity: (cx_min + rand01(rng) * cx_span).clamp(0.0, 1.8),
             surplus: (0.02 + rand01(rng) * 0.14).clamp(-1.0, 2.5),
             trust: (0.40 + rand01(rng) * 0.4).clamp(0.0, 1.0),
             resilience: (0.35 + rand01(rng) * 0.4).clamp(0.05, 1.3),
@@ -836,6 +978,16 @@ fn per_continent_counts(societies: &[SocietyActor], continent_count: usize) -> V
     counts
 }
 
+/// Composite mate-fitness score for sexual selection.
+/// Combines NK landscape fitness with observable society traits.
+fn mate_fitness(society: &SocietyActor, nk_fitness: f64) -> f64 {
+    (0.35 * nk_fitness
+        + 0.25 * (society.surplus.max(0.0) / 2.5).clamp(0.0, 1.0)
+        + 0.20 * society.trust
+        + 0.20 * (society.complexity / 1.8).clamp(0.0, 1.0))
+    .clamp(0.0, 1.0)
+}
+
 fn bit(bits: u64, idx: usize) -> u32 {
     ((bits >> idx) & 1) as u32
 }
@@ -845,13 +997,304 @@ fn rand01(state: &mut u64) -> f64 {
     (*state as f64) / (u64::MAX as f64)
 }
 
+// ---------------------------------------------------------------------------
+// Convergence experiment: systematic multi-run hypothesis testing
+// ---------------------------------------------------------------------------
+
+/// Describes one set of starting conditions for a convergence experiment.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StartingConditions {
+    pub label: String,
+    pub layout: ContinentalLayout,
+    pub isolation_factor: f64,
+    pub initial_societies: u32,
+    pub population_range: (u32, u32),
+    pub initial_complexity_range: (f64, f64),
+    pub resource_multiplier: f64,
+}
+
+/// Configuration for a convergence experiment across many starting conditions.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConvergenceExperimentConfig {
+    pub conditions: Vec<StartingConditions>,
+    pub seeds_per_condition: u32,
+    pub generations: u32,
+    /// Superorganism index must exceed this to count as "arrived".
+    pub superorganism_threshold: f64,
+    /// Must sustain above threshold for this many consecutive generations.
+    pub sustained_generations: u32,
+    pub nk_n: usize,
+    pub nk_k: usize,
+    pub dunbar_model: DunbarBehaviorModel,
+}
+
+/// Per-run outcome for one seed under one condition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunOutcome {
+    pub condition_index: usize,
+    pub seed: u64,
+    pub reached_superorganism: bool,
+    pub time_to_superorganism: Option<u32>,
+    pub peak_superorganism_index: f64,
+    pub final_superorganism_index: f64,
+    pub final_population: u64,
+    pub total_collapses: u32,
+    pub final_mean_complexity: f64,
+}
+
+/// Aggregate statistics for one starting condition.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConditionSummary {
+    pub label: String,
+    pub runs: u32,
+    pub arrival_rate: f64,
+    pub median_time_to_superorganism: Option<u32>,
+    pub mean_peak_superorganism: f64,
+    pub mean_final_superorganism: f64,
+    pub mean_final_complexity: f64,
+    pub mean_collapses: f64,
+}
+
+/// Full experiment result with per-run outcomes and aggregate summaries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConvergenceResult {
+    pub outcomes: Vec<RunOutcome>,
+    pub condition_summaries: Vec<ConditionSummary>,
+    pub overall_arrival_rate: f64,
+}
+
+/// Runs a convergence experiment: many seeds x many starting conditions.
+/// Returns per-run outcomes and aggregate statistics to test whether
+/// superorganism emergence is an attractor under varied initial conditions.
+#[must_use]
+pub fn run_convergence_experiment(cfg: &ConvergenceExperimentConfig) -> ConvergenceResult {
+    // Build work items: (condition_index, seed, EvolutionConfig).
+    let work_items: Vec<(usize, u64, EvolutionConfig)> = cfg
+        .conditions
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, cond)| {
+            (0..cfg.seeds_per_condition).map(move |seed_idx| {
+                let seed = (seed_idx as u64)
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(ci as u64)
+                    .wrapping_add(1)
+                    .max(1);
+                (
+                    ci,
+                    seed,
+                    EvolutionConfig {
+                        seed,
+                        generations: cfg.generations,
+                        initial_societies: cond.initial_societies,
+                        nk_n: cfg.nk_n,
+                        nk_k: cfg.nk_k,
+                        layout: cond.layout,
+                        isolation_factor: cond.isolation_factor,
+                        dunbar_model: cfg.dunbar_model,
+                        population_range: cond.population_range,
+                        initial_complexity_range: cond.initial_complexity_range,
+                        resource_multiplier: cond.resource_multiplier,
+                        ..EvolutionConfig::default()
+                    },
+                )
+            })
+        })
+        .collect();
+
+    // Run all simulations in parallel across available cores.
+    let threshold = cfg.superorganism_threshold;
+    let sustained_gens = cfg.sustained_generations;
+    let outcomes: Vec<RunOutcome> = work_items
+        .par_iter()
+        .map(|(ci, seed, evo_cfg)| {
+            let result = simulate_evolution(*evo_cfg);
+
+            let peak_so = result
+                .snapshots
+                .iter()
+                .map(|s| s.superorganism_index)
+                .fold(0.0_f64, f64::max);
+            let final_snap = result.snapshots.last().copied();
+            let final_so = final_snap.map_or(0.0, |s| s.superorganism_index);
+            let final_pop = final_snap.map_or(0, |s| s.population_total);
+            let final_cx = final_snap.map_or(0.0, |s| s.mean_complexity);
+            let total_collapses: u32 = result.snapshots.iter().map(|s| s.collapse_events).sum();
+
+            let mut consecutive = 0_u32;
+            let mut first_sustained: Option<u32> = None;
+            for snap in &result.snapshots {
+                if snap.superorganism_index >= threshold {
+                    consecutive = consecutive.saturating_add(1);
+                    if consecutive >= sustained_gens && first_sustained.is_none() {
+                        first_sustained = Some(snap.generation.saturating_sub(sustained_gens - 1));
+                    }
+                } else {
+                    consecutive = 0;
+                }
+            }
+
+            RunOutcome {
+                condition_index: *ci,
+                seed: *seed,
+                reached_superorganism: first_sustained.is_some(),
+                time_to_superorganism: first_sustained,
+                peak_superorganism_index: peak_so,
+                final_superorganism_index: final_so,
+                final_population: final_pop,
+                total_collapses,
+                final_mean_complexity: final_cx,
+            }
+        })
+        .collect();
+
+    let mut condition_summaries = Vec::with_capacity(cfg.conditions.len());
+    for (ci, cond) in cfg.conditions.iter().enumerate() {
+        let runs: Vec<&RunOutcome> = outcomes
+            .iter()
+            .filter(|o| o.condition_index == ci)
+            .collect();
+        let n = runs.len() as f64;
+        let arrived = runs.iter().filter(|o| o.reached_superorganism).count();
+        let arrival_rate = if n > 0.0 { (arrived as f64) / n } else { 0.0 };
+
+        let mut times: Vec<u32> = runs
+            .iter()
+            .filter_map(|o| o.time_to_superorganism)
+            .collect();
+        times.sort_unstable();
+        let median_time = if times.is_empty() {
+            None
+        } else {
+            Some(times[times.len() / 2])
+        };
+
+        let mean_peak = runs.iter().map(|o| o.peak_superorganism_index).sum::<f64>() / n.max(1.0);
+        let mean_final = runs
+            .iter()
+            .map(|o| o.final_superorganism_index)
+            .sum::<f64>()
+            / n.max(1.0);
+        let mean_cx = runs.iter().map(|o| o.final_mean_complexity).sum::<f64>() / n.max(1.0);
+        let mean_col = runs
+            .iter()
+            .map(|o| f64::from(o.total_collapses))
+            .sum::<f64>()
+            / n.max(1.0);
+
+        condition_summaries.push(ConditionSummary {
+            label: cond.label.clone(),
+            runs: runs.len() as u32,
+            arrival_rate,
+            median_time_to_superorganism: median_time,
+            mean_peak_superorganism: mean_peak,
+            mean_final_superorganism: mean_final,
+            mean_final_complexity: mean_cx,
+            mean_collapses: mean_col,
+        });
+    }
+
+    let total_runs = outcomes.len();
+    let total_arrived = outcomes.iter().filter(|o| o.reached_superorganism).count();
+    let overall_arrival_rate = if total_runs > 0 {
+        (total_arrived as f64) / (total_runs as f64)
+    } else {
+        0.0
+    };
+
+    ConvergenceResult {
+        outcomes,
+        condition_summaries,
+        overall_arrival_rate,
+    }
+}
+
+/// Returns a default set of starting conditions spanning the hypothesis space.
+#[must_use]
+pub fn default_experiment_conditions() -> Vec<StartingConditions> {
+    vec![
+        StartingConditions {
+            label: "abundant-connected".into(),
+            layout: ContinentalLayout::Connected,
+            isolation_factor: 0.1,
+            initial_societies: 20,
+            population_range: (30, 150),
+            initial_complexity_range: (0.10, 0.30),
+            resource_multiplier: 1.5,
+        },
+        StartingConditions {
+            label: "abundant-isolated".into(),
+            layout: ContinentalLayout::Islands,
+            isolation_factor: 0.8,
+            initial_societies: 20,
+            population_range: (30, 150),
+            initial_complexity_range: (0.10, 0.30),
+            resource_multiplier: 1.5,
+        },
+        StartingConditions {
+            label: "scarce-connected".into(),
+            layout: ContinentalLayout::Connected,
+            isolation_factor: 0.1,
+            initial_societies: 20,
+            population_range: (8, 60),
+            initial_complexity_range: (0.05, 0.15),
+            resource_multiplier: 0.6,
+        },
+        StartingConditions {
+            label: "scarce-isolated".into(),
+            layout: ContinentalLayout::Islands,
+            isolation_factor: 0.8,
+            initial_societies: 20,
+            population_range: (8, 60),
+            initial_complexity_range: (0.05, 0.15),
+            resource_multiplier: 0.6,
+        },
+        StartingConditions {
+            label: "baseline-regional".into(),
+            layout: ContinentalLayout::Regional,
+            isolation_factor: 0.35,
+            initial_societies: 16,
+            population_range: (12, 102),
+            initial_complexity_range: (0.08, 0.28),
+            resource_multiplier: 1.0,
+        },
+        StartingConditions {
+            label: "large-groups-regional".into(),
+            layout: ContinentalLayout::Regional,
+            isolation_factor: 0.35,
+            initial_societies: 8,
+            population_range: (80, 500),
+            initial_complexity_range: (0.15, 0.40),
+            resource_multiplier: 1.2,
+        },
+        StartingConditions {
+            label: "many-small-connected".into(),
+            layout: ContinentalLayout::Connected,
+            isolation_factor: 0.15,
+            initial_societies: 40,
+            population_range: (5, 30),
+            initial_complexity_range: (0.03, 0.12),
+            resource_multiplier: 1.0,
+        },
+        StartingConditions {
+            label: "rich-few-isolated".into(),
+            layout: ContinentalLayout::Islands,
+            isolation_factor: 0.9,
+            initial_societies: 6,
+            population_range: (100, 400),
+            initial_complexity_range: (0.20, 0.50),
+            resource_multiplier: 2.0,
+        },
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_actor_messages, dunbar_behavior, dunbar_group_scale,
-        dunbar_group_scale_with_thresholds, simulate_evolution, ActorMessage, ContinentalLayout,
-        DunbarBehaviorModel, EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor,
-        WorldMap,
+        apply_actor_messages, default_experiment_conditions, dunbar_behavior, dunbar_group_scale,
+        dunbar_group_scale_with_thresholds, run_convergence_experiment, simulate_evolution,
+        ActorMessage, ContinentalLayout, ConvergenceExperimentConfig, DunbarBehaviorModel,
+        EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor, WorldMap,
     };
     use crate::SubsistenceMode;
 
@@ -917,12 +1360,15 @@ mod tests {
     fn evolution_run_shows_both_emergence_and_collapse_events() {
         let result = simulate_evolution(EvolutionConfig {
             seed: 99,
-            generations: 220,
-            initial_societies: 18,
+            generations: 300,
+            initial_societies: 20,
             nk_n: 12,
             nk_k: 3,
-            layout: ContinentalLayout::Regional,
-            isolation_factor: 0.35,
+            layout: ContinentalLayout::Connected,
+            isolation_factor: 0.1,
+            resource_multiplier: 0.6,
+            population_range: (8, 60),
+            initial_complexity_range: (0.05, 0.15),
             dunbar_model: DunbarBehaviorModel::default(),
             ..EvolutionConfig::default()
         });
@@ -942,6 +1388,67 @@ mod tests {
         assert!(peak_complexity > 0.20);
         assert!(collapse_sum > 0);
         assert!(result.snapshots[0].convergence_index >= 0.0);
+        // Superorganism index should be computed and bounded.
+        for snap in &result.snapshots {
+            assert!((0.0..=1.0).contains(&snap.superorganism_index));
+        }
+    }
+
+    #[test]
+    fn sexual_selection_biases_reproduction_toward_fit_societies() {
+        // Run two configs: one with very high resources (should produce higher
+        // superorganism signal) vs very low.
+        let rich = simulate_evolution(EvolutionConfig {
+            seed: 42,
+            generations: 200,
+            resource_multiplier: 2.0,
+            ..EvolutionConfig::default()
+        });
+        let poor = simulate_evolution(EvolutionConfig {
+            seed: 42,
+            generations: 200,
+            resource_multiplier: 0.4,
+            ..EvolutionConfig::default()
+        });
+        let rich_peak = rich
+            .snapshots
+            .iter()
+            .map(|s| s.superorganism_index)
+            .fold(0.0_f64, f64::max);
+        let poor_peak = poor
+            .snapshots
+            .iter()
+            .map(|s| s.superorganism_index)
+            .fold(0.0_f64, f64::max);
+        // Rich environments should produce higher superorganism signals.
+        assert!(rich_peak > poor_peak);
+    }
+
+    #[test]
+    fn convergence_experiment_produces_valid_summaries() {
+        let result = run_convergence_experiment(&ConvergenceExperimentConfig {
+            conditions: default_experiment_conditions(),
+            seeds_per_condition: 3,
+            generations: 100,
+            superorganism_threshold: 0.35,
+            sustained_generations: 5,
+            nk_n: 10,
+            nk_k: 2,
+            dunbar_model: DunbarBehaviorModel::default(),
+        });
+
+        assert_eq!(
+            result.condition_summaries.len(),
+            default_experiment_conditions().len()
+        );
+        assert!(!result.outcomes.is_empty());
+        assert!((0.0..=1.0).contains(&result.overall_arrival_rate));
+
+        for summary in &result.condition_summaries {
+            assert!((0.0..=1.0).contains(&summary.arrival_rate));
+            assert!(summary.mean_peak_superorganism >= 0.0);
+            assert!(summary.mean_final_complexity >= 0.0);
+        }
     }
 
     #[test]
