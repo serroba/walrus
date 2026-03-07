@@ -1,0 +1,20 @@
+# Walrus Simulator Docs
+
+This folder defines the foundation and execution plans for an open-source, high-performance simulation project to test system-level assumptions (energy, materials, ecology, institutions, behavior) and study emergence of a global economic **superorganism**.
+
+## Structure
+
+- `foundations/`: explicit assumptions, mathematical model, and simulation design.
+- `plans/`: phased implementation plans and delivery milestones.
+
+## Guiding Principles
+
+1. Assumptions-first: every model claim must be explicit, versioned, and replaceable.
+2. Multi-scale: individuals, institutions, sectors, and global aggregates.
+3. Reproducibility: deterministic seeds, scenario manifests, and archived outputs.
+4. Performance portability: laptop-first, cluster-ready architecture.
+5. Open science: transparent equations, uncertainty ranges, and validation protocol.
+
+## Immediate Next Step
+
+Start with [`foundations/01_scope-and-goals.md`](./foundations/01_scope-and-goals.md), then implement `plans/01_project-bootstrap.md` and `plans/02_mvp-simulator.md`.
