@@ -4,6 +4,7 @@
 
 Integrate coordination failure and AI-acceleration dynamics into the existing actor-based emergence/collapse simulator.
 Explicitly test whether superorganism emergence is an equilibrium inevitability or a contingent outcome.
+Integrate criticality-aware diagnostics so extreme-event risk is modeled and reported explicitly.
 
 ## Phase 1: Model Contracts
 
@@ -36,6 +37,7 @@ Explicitly test whether superorganism emergence is an equilibrium inevitability 
 - policy intervention loop,
 - information degradation loop.
 - strategic best-response loop and equilibrium classification loop.
+- build-up/release loop for cascade dynamics (criticality behavior).
 
 ## Phase 3: AI Acceleration Layer
 
@@ -58,6 +60,10 @@ Explicitly test whether superorganism emergence is an equilibrium inevitability 
 4. Add inevitability checks:
 - fraction of runs converging to high superorganism/high Nash stability,
 - sensitivity of that fraction under payoff redesign and trust/verification improvements.
+5. Add heavy-tail checks:
+- fit quality for power-law vs log-normal tails,
+- estimated tail exponent stability across seeds,
+- share of total damage/outcome explained by top 1% events.
 
 ## Phase 5: Outputs and Communication
 
@@ -75,3 +81,15 @@ Explicitly test whether superorganism emergence is an equilibrium inevitability 
 3. Documentation updates for assumptions and interpretation.
 4. Regression baselines to prevent silent behavior drift.
 5. Inevitability report artifact: summary table of equilibrium regimes across sweeps.
+6. Criticality report artifact: tail-fit diagnostics and cascade statistics.
+
+## First Build Priorities
+
+1. Add metrics scaffolding first (no behavior changes):
+- event/cascade log schema,
+- tail and criticality diagnostic functions,
+- report/viewer placeholders.
+2. Add minimal dynamics next:
+- simple build-up/release mechanism tied to coordination failure and resource pressure.
+3. Add comparison runs:
+- same scenario with and without suppression policy to expose tail-risk tradeoffs.

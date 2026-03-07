@@ -25,6 +25,7 @@ Status:
 4. Macro stock-flow integration (World3 layer): **Missing**
 5. Game-theoretic equilibrium diagnostics (Nash/Moloch): **Missing**
 6. Superorganism inevitability testing protocol: **Missing**
+7. Criticality and heavy-tail diagnostics: **Missing**
 
 ## Assumption-to-Implementation Matrix
 
@@ -55,6 +56,9 @@ Status:
 9. Superorganism inevitability hypothesis testing:
    - Status: **Not implemented**
    - Gap: no formal criteria for inevitability vs contingency across parameter/game sweeps.
+10. Heavy-tail and criticality modeling:
+   - Status: **Not implemented**
+   - Gap: no cascade event logs, no power-law/log-normal tail diagnostics, no criticality index.
 
 ## Why This Is Not Yet "Meaningful Enough"
 
@@ -93,6 +97,7 @@ Remaining clarity gaps:
 5. Add a public-facing "Model Maturity" panel in the standalone viewer.
 6. Implement game-theory layer with payoff structures and equilibrium metrics.
 7. Add inevitability report: fraction of runs converging to stable superorganism equilibria under varied incentive regimes.
+8. Add criticality report: tail exponents, extreme-event share, and suppression-vs-release comparisons.
 
 ## Bottom Line
 
