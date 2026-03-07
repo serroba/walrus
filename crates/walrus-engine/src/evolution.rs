@@ -343,6 +343,8 @@ pub enum ActorMessage {
     ClimateShock { severity: f64 },
     ResourcePulse { abundance: f64 },
     MigrationLink { strength: f64 },
+    NaturalDisaster { severity: f64 },
+    PandemicWave { severity: f64 },
 }
 
 /// Configures multi-generation evolutionary simulation.
@@ -363,6 +365,8 @@ pub struct EvolutionConfig {
     pub initial_complexity_range: (f64, f64),
     /// Scales continent carrying_capacity and energy_endowment.
     pub resource_multiplier: f64,
+    pub natural_disaster_base_rate: f64,
+    pub pandemic_base_rate: f64,
 }
 
 impl Default for EvolutionConfig {
@@ -379,6 +383,8 @@ impl Default for EvolutionConfig {
             population_range: (12, 102),
             initial_complexity_range: (0.08, 0.28),
             resource_multiplier: 1.0,
+            natural_disaster_base_rate: 0.05,
+            pandemic_base_rate: 0.03,
         }
     }
 }
@@ -396,6 +402,8 @@ pub struct EvolutionSnapshot {
     pub adaptation_divergence: f64,
     /// Weighted superorganism signal from emergence_order_parameters.
     pub superorganism_index: f64,
+    pub natural_disaster_events: u32,
+    pub pandemic_events: u32,
 }
 
 /// Final outcome summary per continent.
@@ -442,6 +450,8 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
     let mut snapshots = Vec::with_capacity(config.generations as usize);
 
     for generation in 0..config.generations {
+        let mut natural_disaster_events = 0_u32;
+        let mut pandemic_events = 0_u32;
         let continent_counts = per_continent_counts(&societies, map.continents.len());
         // Snapshot continent states so all societies act on the same world view.
         let state_snapshot: Vec<ContinentState> = map.states.clone();
@@ -454,9 +464,23 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
                     .wrapping_add(ci as u64)
                     .wrapping_add(generation as u64)
                     .max(1);
-                actor_messages_for(ci, &map, &mut msg_rng)
+                actor_messages_for(ci, &map, &continent_counts, config, &mut msg_rng)
             })
             .collect();
+        // Count disaster/pandemic events from pre-computed messages.
+        for msgs in &continent_messages {
+            for message in msgs {
+                match message {
+                    ActorMessage::NaturalDisaster { .. } => {
+                        natural_disaster_events = natural_disaster_events.saturating_add(1);
+                    }
+                    ActorMessage::PandemicWave { .. } => {
+                        pandemic_events = pandemic_events.saturating_add(1);
+                    }
+                    _ => {}
+                }
+            }
+        }
         // Advance global rng to stay deterministic.
         rand01(&mut rng);
 
@@ -691,6 +715,8 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
             convergence_index,
             adaptation_divergence,
             superorganism_index: global_emergence.superorganism_index,
+            natural_disaster_events,
+            pandemic_events,
         });
     }
 
@@ -767,7 +793,13 @@ fn continent_means(
     means
 }
 
-fn actor_messages_for(continent_idx: usize, map: &WorldMap, rng: &mut u64) -> Vec<ActorMessage> {
+fn actor_messages_for(
+    continent_idx: usize,
+    map: &WorldMap,
+    continent_counts: &[usize],
+    config: EvolutionConfig,
+    rng: &mut u64,
+) -> Vec<ActorMessage> {
     let mut messages = Vec::new();
     let continent = &map.continents[continent_idx];
     let state = map.states[continent_idx];
@@ -790,6 +822,24 @@ fn actor_messages_for(continent_idx: usize, map: &WorldMap, rng: &mut u64) -> Ve
     messages.push(ActorMessage::MigrationLink {
         strength: link_strength.clamp(0.0, 1.5),
     });
+
+    let disaster_rate =
+        (config.natural_disaster_base_rate + 0.4 * continent.shock_risk + 0.2 * state.depletion)
+            .clamp(0.0, 0.9);
+    if rand01(rng) < disaster_rate {
+        messages.push(ActorMessage::NaturalDisaster {
+            severity: (0.12 + 0.70 * rand01(rng)).clamp(0.0, 1.0),
+        });
+    }
+
+    let local_density = continent_counts.get(continent_idx).copied().unwrap_or(0) as f64 / 20.0;
+    let pandemic_rate =
+        (config.pandemic_base_rate + 0.12 * local_density + 0.10 * link_strength).clamp(0.0, 0.95);
+    if rand01(rng) < pandemic_rate {
+        messages.push(ActorMessage::PandemicWave {
+            severity: (0.10 + 0.65 * rand01(rng)).clamp(0.0, 1.0),
+        });
+    }
     messages
 }
 
@@ -807,6 +857,22 @@ fn apply_actor_messages(actor: &mut SocietyActor, messages: &[ActorMessage]) {
             ActorMessage::MigrationLink { strength } => {
                 actor.trust = (actor.trust + 0.02 * strength).clamp(0.0, 1.0);
                 actor.resilience = (actor.resilience + 0.02 * strength).clamp(0.05, 1.3);
+            }
+            ActorMessage::NaturalDisaster { severity } => {
+                actor.population = ((actor.population as f64) * (1.0 - 0.12 * severity))
+                    .round()
+                    .max(4.0) as u32;
+                actor.surplus = (actor.surplus - 0.18 * severity).clamp(-1.0, 2.5);
+                actor.resilience = (actor.resilience - 0.10 * severity).clamp(0.05, 1.3);
+                actor.trust = (actor.trust - 0.05 * severity).clamp(0.0, 1.0);
+            }
+            ActorMessage::PandemicWave { severity } => {
+                actor.population = ((actor.population as f64) * (1.0 - 0.09 * severity))
+                    .round()
+                    .max(4.0) as u32;
+                actor.surplus = (actor.surplus - 0.12 * severity).clamp(-1.0, 2.5);
+                actor.trust = (actor.trust - 0.08 * severity).clamp(0.0, 1.0);
+                actor.resilience = (actor.resilience + 0.03 * (1.0 - severity)).clamp(0.05, 1.3);
             }
         }
     }
@@ -1029,6 +1095,7 @@ pub fn run_convergence_experiment(cfg: &ConvergenceExperimentConfig) -> Converge
                         population_range: cond.population_range,
                         initial_complexity_range: cond.initial_complexity_range,
                         resource_multiplier: cond.resource_multiplier,
+                        ..EvolutionConfig::default()
                     },
                 )
             })
@@ -1302,6 +1369,7 @@ mod tests {
             resource_multiplier: 0.6,
             population_range: (8, 60),
             initial_complexity_range: (0.05, 0.15),
+            dunbar_model: DunbarBehaviorModel::default(),
             ..EvolutionConfig::default()
         });
 

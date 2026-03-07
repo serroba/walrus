@@ -1,4 +1,6 @@
-use walrus_engine::evolution::{simulate_evolution, ContinentalLayout, EvolutionConfig};
+use walrus_engine::evolution::{
+    simulate_evolution, ContinentalLayout, DunbarBehaviorModel, EvolutionConfig,
+};
 
 fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
     let result = simulate_evolution(EvolutionConfig {
@@ -6,6 +8,7 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
         isolation_factor,
         generations: 260,
         initial_societies: 20,
+        dunbar_model: DunbarBehaviorModel::default(),
         ..EvolutionConfig::default()
     });
 
@@ -35,6 +38,8 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
                 convergence_index: 0.0,
                 adaptation_divergence: 0.0,
                 superorganism_index: 0.0,
+                natural_disaster_events: 0,
+                pandemic_events: 0,
             });
 
     println!(
