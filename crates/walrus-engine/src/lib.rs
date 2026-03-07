@@ -546,6 +546,62 @@ pub fn run_emergence_simulation(
     snapshots
 }
 
+/// Baseline multi-society starting point for long-horizon emergence runs.
+#[must_use]
+pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
+    vec![
+        LocalSocietyState {
+            population: 90,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.18,
+            network_coupling: 0.15,
+            ecological_pressure: 0.08,
+        },
+        LocalSocietyState {
+            population: 130,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.22,
+            network_coupling: 0.20,
+            ecological_pressure: 0.10,
+        },
+        LocalSocietyState {
+            population: 240,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.35,
+            network_coupling: 0.35,
+            ecological_pressure: 0.18,
+        },
+        LocalSocietyState {
+            population: 820,
+            mode: SubsistenceMode::Agriculture,
+            surplus_per_capita: 0.52,
+            network_coupling: 0.62,
+            ecological_pressure: 0.30,
+        },
+    ]
+}
+
+/// Higher stress setup for testing balancing loops and regression pressure.
+#[must_use]
+pub fn scenario_ecological_stress() -> Vec<LocalSocietyState> {
+    vec![
+        LocalSocietyState {
+            population: 300,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.20,
+            network_coupling: 0.30,
+            ecological_pressure: 0.75,
+        },
+        LocalSocietyState {
+            population: 1_500,
+            mode: SubsistenceMode::Agriculture,
+            surplus_per_capita: 0.25,
+            network_coupling: 0.70,
+            ecological_pressure: 0.82,
+        },
+    ]
+}
+
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
@@ -555,8 +611,9 @@ mod tests {
     use super::{
         aggregate_from_local_societies, emergence_order_parameters, emergent_dynamics,
         group_behavior_profile, local_complexity, next_subsistence_mode, run_emergence_simulation,
-        step_local_society, AgentState, EmergenceOrderParameters, LocalSocietyState,
-        SimulationConfig, SimulationEngine, SubsistenceMode, TransitionConfig, WorldState,
+        scenario_ecological_stress, scenario_local_emergence_baseline, step_local_society,
+        AgentState, EmergenceOrderParameters, LocalSocietyState, SimulationConfig,
+        SimulationEngine, SubsistenceMode, TransitionConfig, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -808,5 +865,13 @@ mod tests {
         assert!(peak_superorganism >= first.global.superorganism_index);
         assert!(last.global.superorganism_index >= 0.2);
         assert!(peak_complex_societies >= first.sedentary_count);
+    }
+
+    #[test]
+    fn scenario_builders_produce_non_empty_societies() {
+        let baseline = scenario_local_emergence_baseline();
+        let stress = scenario_ecological_stress();
+        assert!(!baseline.is_empty());
+        assert!(!stress.is_empty());
     }
 }

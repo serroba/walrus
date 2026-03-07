@@ -25,3 +25,9 @@ cargo test --workspace --all-targets
 cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only
 cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only
 ```
+
+## Run Emergence Example
+
+```bash
+cargo run -p walrus-engine --example emergence_run
+```
