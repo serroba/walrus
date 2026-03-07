@@ -17,6 +17,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Setup cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
       - name: Format check
         run: cargo fmt --all -- --check
 
@@ -25,3 +28,6 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --all-targets
+
+      - name: Coverage gate
+        run: cargo llvm-cov --workspace --all-targets --fail-under-lines 85 --summary-only
