@@ -31,3 +31,9 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only
 ```bash
 cargo run -p walrus-engine --example emergence_run
 ```
+
+## System Feedback Loop
+
+```bash
+make system-feedback
+```

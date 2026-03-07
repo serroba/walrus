@@ -29,6 +29,7 @@ Use fast, repeated quality loops while implementing:
 1. `make check` after each logical change.
 2. `make coverage-engine` before commit for model-core edits.
 3. `make feedback-loop` before push.
+4. `make system-feedback` for long-horizon behavioral regression checks.
 
 ## Commit Frequency
 

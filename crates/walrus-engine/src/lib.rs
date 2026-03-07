@@ -91,6 +91,18 @@ pub struct EmergenceSnapshot {
     pub agriculture_count: usize,
 }
 
+/// Condensed long-horizon summary for regression-style feedback checks.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EmergenceSummary {
+    pub start_superorganism: f64,
+    pub end_superorganism: f64,
+    pub peak_superorganism: f64,
+    pub start_mean_complexity: f64,
+    pub end_mean_complexity: f64,
+    pub peak_mean_complexity: f64,
+    pub peak_complex_societies: usize,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -546,6 +558,48 @@ pub fn run_emergence_simulation(
     snapshots
 }
 
+/// Produces aggregate metrics used for system-level regression checks.
+#[must_use]
+pub fn summarize_emergence(snapshots: &[EmergenceSnapshot]) -> EmergenceSummary {
+    if snapshots.is_empty() {
+        return EmergenceSummary {
+            start_superorganism: 0.0,
+            end_superorganism: 0.0,
+            peak_superorganism: 0.0,
+            start_mean_complexity: 0.0,
+            end_mean_complexity: 0.0,
+            peak_mean_complexity: 0.0,
+            peak_complex_societies: 0,
+        };
+    }
+
+    let first = snapshots[0];
+    let last = snapshots[snapshots.len() - 1];
+    let peak_superorganism = snapshots
+        .iter()
+        .map(|s| s.global.superorganism_index)
+        .fold(0.0, f64::max);
+    let peak_mean_complexity = snapshots
+        .iter()
+        .map(|s| s.mean_local_complexity)
+        .fold(0.0, f64::max);
+    let peak_complex_societies = snapshots
+        .iter()
+        .map(|s| s.sedentary_count + s.agriculture_count)
+        .max()
+        .unwrap_or(0);
+
+    EmergenceSummary {
+        start_superorganism: first.global.superorganism_index,
+        end_superorganism: last.global.superorganism_index,
+        peak_superorganism,
+        start_mean_complexity: first.mean_local_complexity,
+        end_mean_complexity: last.mean_local_complexity,
+        peak_mean_complexity,
+        peak_complex_societies,
+    }
+}
+
 /// Baseline multi-society starting point for long-horizon emergence runs.
 #[must_use]
 pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
@@ -612,8 +666,8 @@ mod tests {
         aggregate_from_local_societies, emergence_order_parameters, emergent_dynamics,
         group_behavior_profile, local_complexity, next_subsistence_mode, run_emergence_simulation,
         scenario_ecological_stress, scenario_local_emergence_baseline, step_local_society,
-        AgentState, EmergenceOrderParameters, LocalSocietyState, SimulationConfig,
-        SimulationEngine, SubsistenceMode, TransitionConfig, WorldState,
+        summarize_emergence, AgentState, EmergenceOrderParameters, LocalSocietyState,
+        SimulationConfig, SimulationEngine, SubsistenceMode, TransitionConfig, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -846,25 +900,12 @@ mod tests {
         let snapshots = run_emergence_simulation(initial, 60, cfg);
         assert!(!snapshots.is_empty());
         let first = snapshots[0];
-        let last = snapshots[snapshots.len() - 1];
-        let peak_complexity = snapshots
-            .iter()
-            .map(|s| s.mean_local_complexity)
-            .fold(0.0, f64::max);
-        let peak_superorganism = snapshots
-            .iter()
-            .map(|s| s.global.superorganism_index)
-            .fold(0.0, f64::max);
-        let peak_complex_societies = snapshots
-            .iter()
-            .map(|s| s.sedentary_count + s.agriculture_count)
-            .max()
-            .unwrap_or(0);
+        let summary = summarize_emergence(&snapshots);
 
-        assert!(peak_complexity >= first.mean_local_complexity);
-        assert!(peak_superorganism >= first.global.superorganism_index);
-        assert!(last.global.superorganism_index >= 0.2);
-        assert!(peak_complex_societies >= first.sedentary_count);
+        assert!(summary.peak_mean_complexity >= summary.start_mean_complexity);
+        assert!(summary.peak_superorganism >= summary.start_superorganism);
+        assert!(summary.end_superorganism >= 0.2);
+        assert!(summary.peak_complex_societies >= first.sedentary_count);
     }
 
     #[test]
