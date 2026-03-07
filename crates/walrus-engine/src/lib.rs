@@ -120,6 +120,46 @@ pub enum TrajectoryClass {
     StagnantLowComplexity,
 }
 
+/// Individual-level actor for micro interaction simulations.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MicroAgent {
+    pub resources: f64,
+    pub trust: f64,
+    pub status: f64,
+    pub aggression: f64,
+    pub cooperation: f64,
+}
+
+/// Aggregate statistics from one micro-interaction tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AgentInteractionStats {
+    pub cooperations: u32,
+    pub conflicts: u32,
+    pub trades: u32,
+    pub mean_trust: f64,
+    pub inequality: f64,
+}
+
+/// Micro-founded society state for explicit agent-based simulation.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentBasedSociety {
+    pub mode: SubsistenceMode,
+    pub agents: Vec<MicroAgent>,
+    pub network_coupling: f64,
+    pub ecological_pressure: f64,
+}
+
+/// One tick record for the agent-based simulation loop.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AgentBasedSnapshot {
+    pub tick: u64,
+    pub mode: SubsistenceMode,
+    pub macro_state: LocalSocietyState,
+    pub interactions: AgentInteractionStats,
+    pub complexity: LocalComplexity,
+    pub emergence: EmergenceOrderParameters,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -672,6 +712,230 @@ pub fn classify_trajectory(summary: EmergenceSummary) -> TrajectoryClass {
     }
 }
 
+/// Builds deterministic initial agents for a subsistence mode.
+#[must_use]
+pub fn seed_micro_agents(count: usize, mode: SubsistenceMode) -> Vec<MicroAgent> {
+    let (resource_base, trust_base, aggression_base, cooperation_base) = match mode {
+        SubsistenceMode::HunterGatherer => (0.22, 0.62, 0.25, 0.68),
+        SubsistenceMode::Sedentary => (0.35, 0.52, 0.35, 0.55),
+        SubsistenceMode::Agriculture => (0.50, 0.44, 0.45, 0.46),
+    };
+
+    (0..count)
+        .map(|i| {
+            let i_f = i as f64;
+            let wave = (i_f * 0.37).sin() * 0.08;
+            let skew = ((i % 7) as f64) / 30.0;
+            MicroAgent {
+                resources: (resource_base + wave + skew).clamp(0.01, 2.0),
+                trust: (trust_base + wave * 0.4).clamp(0.0, 1.0),
+                status: (0.45 + skew * 0.6).clamp(0.0, 1.0),
+                aggression: (aggression_base + ((i % 5) as f64) * 0.04).clamp(0.0, 1.0),
+                cooperation: (cooperation_base - ((i % 6) as f64) * 0.03).clamp(0.0, 1.0),
+            }
+        })
+        .collect()
+}
+
+/// Creates an agent-based society with deterministic seed population.
+#[must_use]
+pub fn seed_agent_based_society(
+    count: usize,
+    mode: SubsistenceMode,
+    network_coupling: f64,
+    ecological_pressure: f64,
+) -> AgentBasedSociety {
+    AgentBasedSociety {
+        mode,
+        agents: seed_micro_agents(count, mode),
+        network_coupling: clamp01(network_coupling),
+        ecological_pressure: clamp01(ecological_pressure),
+    }
+}
+
+/// Converts micro state into local macro proxies used by the emergence model.
+#[must_use]
+pub fn macro_from_agents(society: &AgentBasedSociety) -> LocalSocietyState {
+    let pop = society.agents.len() as u32;
+    let mean_resources = if society.agents.is_empty() {
+        0.0
+    } else {
+        society.agents.iter().map(|a| a.resources).sum::<f64>() / (society.agents.len() as f64)
+    };
+
+    LocalSocietyState {
+        population: pop.max(1),
+        mode: society.mode,
+        surplus_per_capita: mean_resources.clamp(0.0, 2.0),
+        network_coupling: society.network_coupling,
+        ecological_pressure: society.ecological_pressure,
+    }
+}
+
+/// Advances the agent-level system by one interaction tick.
+#[must_use]
+pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInteractionStats {
+    let n = society.agents.len();
+    if n < 2 {
+        return AgentInteractionStats {
+            cooperations: 0,
+            conflicts: 0,
+            trades: 0,
+            mean_trust: society.agents.first().map_or(0.0, |a| a.trust),
+            inequality: 0.0,
+        };
+    }
+
+    let mut cooperations = 0_u32;
+    let mut conflicts = 0_u32;
+    let mut trades = 0_u32;
+
+    for idx in 0..n {
+        let j = (idx + 1) % n;
+        let a = society.agents[idx];
+        let b = society.agents[j];
+
+        let social_cohesion = 0.5 * (a.cooperation + b.cooperation) + 0.3 * (a.trust + b.trust);
+        let aggression = 0.5 * (a.aggression + b.aggression);
+
+        if social_cohesion - aggression > 0.65 {
+            cooperations = cooperations.saturating_add(1);
+            let gain = 0.018 + 0.012 * clamp01(society.network_coupling);
+            society.agents[idx].resources = (society.agents[idx].resources + gain).clamp(0.0, 3.0);
+            society.agents[j].resources = (society.agents[j].resources + gain).clamp(0.0, 3.0);
+            society.agents[idx].trust = (society.agents[idx].trust + 0.015).clamp(0.0, 1.0);
+            society.agents[j].trust = (society.agents[j].trust + 0.015).clamp(0.0, 1.0);
+        } else if aggression > 0.60 && (a.status - b.status).abs() > 0.08 {
+            conflicts = conflicts.saturating_add(1);
+            let transfer = 0.020 + 0.015 * aggression;
+            if a.status >= b.status {
+                society.agents[idx].resources =
+                    (society.agents[idx].resources + transfer).clamp(0.0, 3.0);
+                society.agents[j].resources =
+                    (society.agents[j].resources - transfer).clamp(0.0, 3.0);
+            } else {
+                society.agents[j].resources =
+                    (society.agents[j].resources + transfer).clamp(0.0, 3.0);
+                society.agents[idx].resources =
+                    (society.agents[idx].resources - transfer).clamp(0.0, 3.0);
+            }
+            society.agents[idx].trust = (society.agents[idx].trust - 0.020).clamp(0.0, 1.0);
+            society.agents[j].trust = (society.agents[j].trust - 0.020).clamp(0.0, 1.0);
+        } else {
+            trades = trades.saturating_add(1);
+            let mean = 0.5 * (society.agents[idx].resources + society.agents[j].resources);
+            society.agents[idx].resources =
+                (0.75 * society.agents[idx].resources + 0.25 * mean).clamp(0.0, 3.0);
+            society.agents[j].resources =
+                (0.75 * society.agents[j].resources + 0.25 * mean).clamp(0.0, 3.0);
+            society.agents[idx].trust = (society.agents[idx].trust + 0.004).clamp(0.0, 1.0);
+            society.agents[j].trust = (society.agents[j].trust + 0.004).clamp(0.0, 1.0);
+        }
+    }
+
+    let maintenance = match society.mode {
+        SubsistenceMode::HunterGatherer => 0.006,
+        SubsistenceMode::Sedentary => 0.010,
+        SubsistenceMode::Agriculture => 0.014,
+    };
+    let ecological_cost = 0.020 * society.ecological_pressure;
+    for agent in &mut society.agents {
+        agent.resources = (agent.resources - maintenance - ecological_cost).clamp(0.0, 3.0);
+    }
+
+    let mean_trust = society.agents.iter().map(|a| a.trust).sum::<f64>() / (n as f64);
+    let inequality = gini_of_resources(&society.agents);
+
+    AgentInteractionStats {
+        cooperations,
+        conflicts,
+        trades,
+        mean_trust,
+        inequality,
+    }
+}
+
+/// Runs a micro agent-based simulation and projects each tick into emergence metrics.
+#[must_use]
+pub fn run_agent_based_simulation(
+    mut society: AgentBasedSociety,
+    ticks: u64,
+    cfg: TransitionConfig,
+) -> Vec<AgentBasedSnapshot> {
+    let mut out = Vec::with_capacity(ticks as usize);
+
+    for tick in 0..ticks {
+        let interactions = step_agent_based_society(&mut society);
+        let macro_state = macro_from_agents(&society);
+        let complexity = local_complexity(macro_state);
+        let emergence = emergence_order_parameters(
+            macro_state.population,
+            macro_state.mode,
+            macro_state.surplus_per_capita,
+            macro_state.network_coupling,
+            macro_state.ecological_pressure,
+        );
+
+        out.push(AgentBasedSnapshot {
+            tick,
+            mode: society.mode,
+            macro_state,
+            interactions,
+            complexity,
+            emergence,
+        });
+
+        let next_mode = next_subsistence_mode(
+            society.mode,
+            macro_state.population,
+            macro_state.surplus_per_capita,
+            macro_state.ecological_pressure,
+            cfg,
+        );
+        society.mode = next_mode;
+
+        let trust_drag = 0.03 * (1.0 - interactions.mean_trust);
+        let restoration = match society.mode {
+            SubsistenceMode::HunterGatherer => 0.018,
+            SubsistenceMode::Sedentary => 0.010,
+            SubsistenceMode::Agriculture => 0.006,
+        };
+        society.ecological_pressure =
+            (society.ecological_pressure + 0.020 * emergence.throughput_pressure + trust_drag
+                - restoration)
+                .clamp(0.0, 1.0);
+
+        society.network_coupling = (society.network_coupling
+            + 0.015 * emergence.coordination_centralization
+            - 0.010 * society.ecological_pressure)
+            .clamp(0.0, 1.0);
+    }
+
+    out
+}
+
+fn gini_of_resources(agents: &[MicroAgent]) -> f64 {
+    if agents.is_empty() {
+        return 0.0;
+    }
+
+    let mut values: Vec<f64> = agents.iter().map(|a| a.resources.max(0.0)).collect();
+    values.sort_by(f64::total_cmp);
+    let n = values.len() as f64;
+    let sum = values.iter().sum::<f64>();
+    if sum <= 0.0 {
+        return 0.0;
+    }
+
+    let weighted = values
+        .iter()
+        .enumerate()
+        .map(|(i, v)| ((i as f64) + 1.0) * v)
+        .sum::<f64>();
+
+    (2.0 * weighted) / (n * sum) - (n + 1.0) / n
+}
+
 /// Baseline multi-society starting point for long-horizon emergence runs.
 #[must_use]
 pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
@@ -792,10 +1056,12 @@ fn clamp01(value: f64) -> f64 {
 mod tests {
     use super::{
         aggregate_from_local_societies, classify_trajectory, emergence_order_parameters,
-        emergent_dynamics, group_behavior_profile, local_complexity, next_subsistence_mode,
+        emergent_dynamics, gini_of_resources, group_behavior_profile, local_complexity,
+        macro_from_agents, next_subsistence_mode, run_agent_based_simulation,
         run_emergence_simulation, scenario_dense_coupled_growth, scenario_ecological_stress,
-        scenario_fragmented_low_coupling, scenario_local_emergence_baseline, step_local_society,
-        summarize_emergence, AgentState, EmergenceOrderParameters, LocalSocietyState,
+        scenario_fragmented_low_coupling, scenario_local_emergence_baseline,
+        seed_agent_based_society, seed_micro_agents, step_agent_based_society, step_local_society,
+        summarize_emergence, AgentState, EmergenceOrderParameters, LocalSocietyState, MicroAgent,
         SimulationConfig, SimulationEngine, SubsistenceMode, TrajectoryClass, TransitionConfig,
         WorldState,
     };
@@ -1076,5 +1342,100 @@ mod tests {
             peak_complex_societies: 3,
         });
         assert_eq!(class, TrajectoryClass::OvershootAndCorrection);
+    }
+
+    #[test]
+    fn seed_micro_agents_builds_expected_count() {
+        let agents = seed_micro_agents(64, SubsistenceMode::Sedentary);
+        assert_eq!(agents.len(), 64);
+        assert!(agents.iter().all(|a| (0.0..=1.0).contains(&a.trust)));
+    }
+
+    #[test]
+    fn step_agent_based_society_generates_interaction_events() {
+        let mut society = seed_agent_based_society(36, SubsistenceMode::Sedentary, 0.4, 0.2);
+        let stats = step_agent_based_society(&mut society);
+        let total = stats.cooperations + stats.conflicts + stats.trades;
+        assert!(total > 0);
+        assert!((0.0..=1.0).contains(&stats.mean_trust));
+        assert!((0.0..=1.0).contains(&stats.inequality));
+    }
+
+    #[test]
+    fn macro_from_agents_reflects_population_and_mode() {
+        let society = seed_agent_based_society(81, SubsistenceMode::HunterGatherer, 0.2, 0.1);
+        let macro_state = macro_from_agents(&society);
+        assert_eq!(macro_state.population, 81);
+        assert_eq!(macro_state.mode, SubsistenceMode::HunterGatherer);
+    }
+
+    #[test]
+    fn run_agent_based_simulation_produces_snapshots() {
+        let society = seed_agent_based_society(49, SubsistenceMode::Sedentary, 0.4, 0.2);
+        let snaps = run_agent_based_simulation(society, 50, TransitionConfig::default());
+        assert_eq!(snaps.len(), 50);
+        assert!(snaps[49].emergence.superorganism_index >= 0.0);
+    }
+
+    #[test]
+    fn gini_is_zero_for_equal_distribution() {
+        let agents = vec![
+            MicroAgent {
+                resources: 1.0,
+                trust: 0.5,
+                status: 0.5,
+                aggression: 0.2,
+                cooperation: 0.6,
+            };
+            8
+        ];
+        let g = gini_of_resources(&agents);
+        assert!(g <= 0.0001);
+    }
+
+    #[test]
+    fn gini_increases_with_unequal_distribution() {
+        let equal = vec![
+            MicroAgent {
+                resources: 1.0,
+                trust: 0.5,
+                status: 0.5,
+                aggression: 0.2,
+                cooperation: 0.6,
+            };
+            6
+        ];
+        let unequal = vec![
+            MicroAgent {
+                resources: 0.1,
+                trust: 0.5,
+                status: 0.5,
+                aggression: 0.2,
+                cooperation: 0.6,
+            },
+            MicroAgent {
+                resources: 0.1,
+                trust: 0.5,
+                status: 0.5,
+                aggression: 0.2,
+                cooperation: 0.6,
+            },
+            MicroAgent {
+                resources: 0.1,
+                trust: 0.5,
+                status: 0.5,
+                aggression: 0.2,
+                cooperation: 0.6,
+            },
+            MicroAgent {
+                resources: 2.8,
+                trust: 0.5,
+                status: 0.5,
+                aggression: 0.2,
+                cooperation: 0.6,
+            },
+        ];
+
+        assert!(gini_of_resources(&unequal) > gini_of_resources(&equal));
     }
 }

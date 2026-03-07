@@ -59,6 +59,15 @@ This writes a self-contained interactive dashboard:
 
 - `outputs/latest/app/index.html`
 
+## Run Agent-Life TUI
+
+```bash
+make tui-life
+```
+
+This launches a live terminal simulation where each character is an agent and
+emergence is shown frame-by-frame.
+
 ## Exploration Snapshots
 
 Generated from real scenario outputs (`make viz-report` + `node scripts/generate_snapshots.mjs`):
@@ -72,3 +81,11 @@ Generated from real scenario outputs (`make viz-report` + `node scripts/generate
 ```bash
 make system-feedback
 ```
+
+## Agent/Actor Simulation
+
+The engine supports explicit micro-agent interaction loops (cooperation/trade/conflict) that roll up into macro emergence metrics.
+
+Usage guidance is documented in:
+
+- `docs/foundations/09_agent-actor-simulation.md`

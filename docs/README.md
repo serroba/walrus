@@ -21,5 +21,6 @@ Start with [`foundations/01_scope-and-goals.md`](./foundations/01_scope-and-goal
 For emergence-first work, also use [`foundations/06_emergence-rules-and-feedbacks.md`](./foundations/06_emergence-rules-and-feedbacks.md).
 For macro stock-flow constraints, use [`foundations/07_pyworld3-integration-notes.md`](./foundations/07_pyworld3-integration-notes.md).
 For non-technical communication, use [`foundations/08_visualization-guidelines.md`](./foundations/08_visualization-guidelines.md).
+For concrete agent/actor simulation usage, use [`foundations/09_agent-actor-simulation.md`](./foundations/09_agent-actor-simulation.md).
 For generated example visuals, use [`visual-exploration.md`](./visual-exploration.md).
 For assumption coverage and readiness review, use [`validation/01_assumption-validation.md`](./validation/01_assumption-validation.md).

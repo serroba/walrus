@@ -1,4 +1,4 @@
-.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report viz-app
+.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report viz-app tui-life
 
 LLVM_COV_BIN := $(shell sh -c 'command -v llvm-cov 2>/dev/null || xcrun --find llvm-cov 2>/dev/null')
 LLVM_PROFDATA_BIN := $(shell sh -c 'command -v llvm-profdata 2>/dev/null || xcrun --find llvm-profdata 2>/dev/null')
@@ -41,3 +41,6 @@ viz-report:
 
 viz-app:
 	cargo run -q -p walrus-engine --example visualization_app
+
+tui-life:
+	cargo run -q -p walrus-engine --example agent_life_tui
