@@ -700,6 +700,7 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
                     surplus_per_capita: s.surplus.max(0.0),
                     network_coupling: coupling,
                     ecological_pressure: eco_pressure.clamp(0.0, 1.0),
+                    governance: crate::GovernanceState::default(),
                 }
             })
             .collect();

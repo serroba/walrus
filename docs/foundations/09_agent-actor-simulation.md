@@ -18,7 +18,9 @@ The model now includes an explicit actor-message loop in the evolutionary layer:
 
 1. `MicroAgent`:
    - `resources`, `trust`, `status`, `aggression`, `cooperation`,
-   - memory fields: `recent_conflict`, `recent_coop`.
+   - memory fields: `recent_conflict`, `recent_coop`,
+   - `role`: functional role (`Producer` / `Coordinator` / `Trader`),
+   - `affinity: [f64; 3]`: cultural identity vector for oxytocin in-group/out-group dynamics.
 2. `AgentBasedSociety`:
    - collection of agents,
    - current subsistence mode,
@@ -31,13 +33,22 @@ The model now includes an explicit actor-message loop in the evolutionary layer:
      - mean resources/trust/inequality,
      - event rates,
      - mode composition shares.
-   - projected to `LocalSocietyState`,
+   - projected to `LocalSocietyState` (which now includes `GovernanceState`),
    - mapped into `local_complexity` and `emergence_from_projection`.
+4. `GovernanceState` (per-society governance):
+   - current policy (`Laissez` / `Redistributive` / `Extractive`),
+   - tax rate and redistribution rate,
+   - stress channel: `price_pressure` and `legitimacy` in [0, 1].
+   - Updated each tick via `adapt_governance` based on surplus and ecological pressure.
 
 ## Per-Tick Execution Loop
 
 1. Run micro interactions (`step_agent_based_society`):
-   - probabilistic cooperation, conflict, trade, migration events.
+   - probabilistic cooperation, conflict, trade, migration events,
+   - role-based modifiers (coordinators boost cooperation, traders boost trade),
+   - oxytocin modifiers based on affinity distance (bonding/othering),
+   - affinity drift: cooperation → convergence, conflict → divergence, trade → mild convergence,
+   - **raid resolution**: when conflict exceeds 25% of population and ecological stress is high, high-aggression agents form raiding parties that seize resources from low-aggression agents, with affinity polarization between raiders and victims.
 2. Apply bounded demographic dynamics:
    - births, deaths, and replacement to enforce population floors/ceilings.
 2. Convert micro state to macro proxy (`macro_from_agents`).
@@ -87,6 +98,26 @@ Use the terminal UI to watch agent interactions directly:
 
 - See emergence as a bottom-up process.
 - Test whether local interactions are sufficient for large-scale behavior.
+- Observe emergent tribal clustering from oxytocin-driven affinity dynamics.
+- Track governance policy cycles (laissez-faire → redistributive → extractive → recovery).
+- Observe inter-society wars and agent-level raids as emergent conflict resolution.
+
+## War Mechanics (Two Layers)
+
+### Society-Level Wars (`resolve_society_wars`)
+
+Evaluated each tick in `run_emergence_simulation` between all society pairs:
+- **War probability**: driven by governance stress (low legitimacy), ecological pressure, and surplus differential between societies. Network coupling acts as a peace dividend (reduces war probability).
+- **Military strength**: `population × mode_multiplier × (1 + surplus) × governance_factor`. Extractive regimes mobilize +20% more; laissez-faire regimes -20%.
+- **Resolution**: probabilistic, weighted by strength ratio. Winner gains population and surplus; both sides suffer casualties and ecological damage.
+- **Legitimacy shock**: wars erode governance legitimacy (-4% for winners, -12% for losers).
+
+### Agent-Level Raids (`step_agent_based_society`)
+
+Triggered when conflict count exceeds 25% of agents and ecological stress is elevated:
+- **Raid probability**: `0.15 × stress + 0.10 × conflict_rate`.
+- **Mechanics**: top-20% by aggression form a raiding party; bottom-20% are victims. Raiders gain resources (+0.08 to +0.12) and status; victims lose resources and trust.
+- **Affinity polarization**: raiders converge toward each other (forming a war band identity), victims converge toward each other (shared victimhood). This deepens in-group/out-group boundaries.
 - Identify parameter zones producing:
   - stabilizing complexity,
   - overshoot/correction,

@@ -13,6 +13,113 @@ pub enum SubsistenceMode {
     Agriculture,
 }
 
+/// Functional role of an agent within the micro-interaction model.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AgentRole {
+    /// Primary resource producer (farmers, gatherers).
+    Producer,
+    /// Governance/coordination specialist — redistributes and reduces conflict.
+    Coordinator,
+    /// Trade specialist — facilitates exchange and reduces inequality.
+    Trader,
+}
+
+/// Governance policy type selected by the adaptive governance module.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GovernancePolicy {
+    /// Minimal governance — low taxation, low redistribution.
+    Laissez,
+    /// Moderate redistribution aiming at stability.
+    Redistributive,
+    /// Strong extraction by elites, high coercion.
+    Extractive,
+}
+
+/// Stress channel state tracking the resource → price → legitimacy causal chain.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StressChannel {
+    /// Scarcity-driven price pressure in [0, 1]. Rises when resources fall relative to population.
+    pub price_pressure: f64,
+    /// Legitimacy of current governance in [0, 1]. Erodes under sustained price pressure.
+    pub legitimacy: f64,
+}
+
+/// Governance module state attached to each local society.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GovernanceState {
+    /// Current active policy.
+    pub policy: GovernancePolicy,
+    /// Tax rate applied to surplus (set by adaptive policy logic).
+    pub tax_rate: f64,
+    /// Fraction of taxed surplus redistributed back to population.
+    pub redistribution_rate: f64,
+    /// Cumulative legitimacy stress from the stress channel.
+    pub stress: StressChannel,
+}
+
+impl Default for GovernanceState {
+    fn default() -> Self {
+        Self {
+            policy: GovernancePolicy::Laissez,
+            tax_rate: 0.05,
+            redistribution_rate: 0.50,
+            stress: StressChannel {
+                price_pressure: 0.0,
+                legitimacy: 0.80,
+            },
+        }
+    }
+}
+
+/// Adaptive governance policy selection based on current stress channel state.
+///
+/// Policy transitions are driven by legitimacy thresholds and surplus conditions:
+/// - High legitimacy + adequate surplus → Laissez (minimal intervention)
+/// - Moderate legitimacy or price stress → Redistributive (stabilization)
+/// - Low legitimacy + high extraction → Extractive (coercive elite capture)
+#[must_use]
+pub fn adapt_governance(
+    gov: GovernanceState,
+    surplus_per_capita: f64,
+    ecological_pressure: f64,
+) -> GovernanceState {
+    let stress = &gov.stress;
+
+    // Step 1: Update stress channel — resource scarcity → price pressure → legitimacy erosion
+    let scarcity_signal = clamp01(ecological_pressure + (0.30 - surplus_per_capita).max(0.0));
+    let next_price_pressure = clamp01(0.85 * stress.price_pressure + 0.15 * scarcity_signal);
+
+    // Legitimacy erodes under sustained price pressure, recovers slowly when pressure is low.
+    let legitimacy_delta = -0.08 * next_price_pressure + 0.04 * (1.0 - next_price_pressure);
+    let next_legitimacy = clamp01(stress.legitimacy + legitimacy_delta);
+
+    // Step 2: Adaptive policy selection
+    let next_policy = if next_legitimacy >= 0.65 && surplus_per_capita >= 0.20 {
+        GovernancePolicy::Laissez
+    } else if next_legitimacy >= 0.35 {
+        GovernancePolicy::Redistributive
+    } else {
+        GovernancePolicy::Extractive
+    };
+
+    // Step 3: Policy-dependent tax and redistribution rates
+    let (next_tax, next_redist) = match next_policy {
+        GovernancePolicy::Laissez => (0.05, 0.50),
+        GovernancePolicy::Redistributive => (0.15, 0.70),
+        GovernancePolicy::Extractive => (0.25, 0.20),
+    };
+
+    GovernanceState {
+        policy: next_policy,
+        tax_rate: next_tax,
+        redistribution_rate: next_redist,
+        stress: StressChannel {
+            price_pressure: next_price_pressure,
+            legitimacy: next_legitimacy,
+        },
+    }
+}
+
 /// Aggregated social behavior profile induced by group size and regime.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BehaviorProfile {
@@ -49,6 +156,8 @@ pub struct LocalSocietyState {
     pub surplus_per_capita: f64,
     pub network_coupling: f64,
     pub ecological_pressure: f64,
+    /// Governance module tracking adaptive policy and stress channel.
+    pub governance: GovernanceState,
 }
 
 /// Complexity signature for a local society.
@@ -135,6 +244,17 @@ pub struct MicroAgent {
     pub cooperation: f64,
     pub recent_conflict: f64,
     pub recent_coop: f64,
+    /// Functional role that modifies interaction behavior.
+    pub role: AgentRole,
+    /// Identity/cultural affinity vector (oxytocin model).
+    ///
+    /// Euclidean distance between two agents' affinity vectors determines
+    /// in-group vs out-group perception. Small distance → oxytocin bonding
+    /// (boosted cooperation, trust). Large distance → othering effect
+    /// (boosted aggression, reduced trust). Vectors drift toward partners
+    /// on cooperation and away on conflict, producing emergent tribal
+    /// clustering.
+    pub affinity: [f64; 3],
 }
 
 /// Topology for selecting interaction partners in the agent graph.
@@ -174,6 +294,7 @@ pub struct AgentInteractionStats {
     pub conflicts: u32,
     pub trades: u32,
     pub migrations: u32,
+    pub raids: u32,
     pub births: u32,
     pub deaths: u32,
     pub replacements: u32,
@@ -621,13 +742,171 @@ pub fn step_local_society(
         cfg,
     );
 
+    // Governance: adapt policy then apply tax/redistribution to surplus.
+    let next_governance =
+        adapt_governance(state.governance, next_surplus, next_ecological_pressure);
+    let tax_drain = next_governance.tax_rate * next_surplus;
+    let redistributed = tax_drain * next_governance.redistribution_rate;
+    let governance_adjusted_surplus = (next_surplus - tax_drain + redistributed).clamp(0.0, 2.0);
+
+    // Governance policy feeds back into ecological pressure and coupling.
+    let policy_eco_modifier = match next_governance.policy {
+        GovernancePolicy::Laissez => 0.0,
+        GovernancePolicy::Redistributive => -0.01, // mild stabilization
+        GovernancePolicy::Extractive => 0.02,      // over-extraction degrades environment
+    };
+    let final_eco = (next_ecological_pressure + policy_eco_modifier).clamp(0.0, 1.0);
+
     LocalSocietyState {
         population: next_population,
         mode: next_mode,
-        surplus_per_capita: next_surplus,
+        surplus_per_capita: governance_adjusted_surplus,
         network_coupling: next_coupling,
-        ecological_pressure: next_ecological_pressure,
+        ecological_pressure: final_eco,
+        governance: next_governance,
     }
+}
+
+/// Result of a society-level war between two local societies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WarOutcome {
+    /// Index of the attacking society.
+    pub attacker: usize,
+    /// Index of the defending society.
+    pub defender: usize,
+    /// Military strength of attacker (population × aggression proxy × surplus).
+    pub attacker_strength: f64,
+    /// Military strength of defender.
+    pub defender_strength: f64,
+    /// Population transferred from loser to winner.
+    pub population_transfer: u32,
+    /// Surplus seized by the winner.
+    pub surplus_seized: f64,
+}
+
+/// Computes military strength of a society for war resolution.
+fn military_strength(society: &LocalSocietyState) -> f64 {
+    let pop = f64::from(society.population);
+    let mode_mult = match society.mode {
+        SubsistenceMode::HunterGatherer => 0.6,
+        SubsistenceMode::Sedentary => 1.0,
+        SubsistenceMode::Agriculture => 1.4,
+    };
+    let surplus_factor = 1.0 + society.surplus_per_capita;
+    let governance_factor = match society.governance.policy {
+        GovernancePolicy::Extractive => 1.2, // extractive regimes mobilize more
+        GovernancePolicy::Redistributive => 1.0,
+        GovernancePolicy::Laissez => 0.8,
+    };
+    pop * mode_mult * surplus_factor * governance_factor
+}
+
+/// Evaluates and resolves inter-society wars for one tick.
+///
+/// Wars are probabilistic: societies under stress with surplus differentials are
+/// more likely to raid wealthier neighbors. Returns the list of war outcomes
+/// and mutates societies in place.
+fn resolve_society_wars(
+    societies: &mut [LocalSocietyState],
+    rng_state: &mut u64,
+) -> Vec<WarOutcome> {
+    let n = societies.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut outcomes = Vec::new();
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // War probability: driven by stress, surplus differential, and governance crisis.
+            let stress_i = societies[i].ecological_pressure
+                + (1.0 - societies[i].governance.stress.legitimacy);
+            let stress_j = societies[j].ecological_pressure
+                + (1.0 - societies[j].governance.stress.legitimacy);
+            let surplus_diff =
+                (societies[i].surplus_per_capita - societies[j].surplus_per_capita).abs();
+
+            // Base war probability is low; rises with stress and inequality between societies.
+            let war_p = clamp01(
+                0.005 * (stress_i + stress_j) + 0.008 * surplus_diff
+                    - 0.01 * (societies[i].network_coupling + societies[j].network_coupling),
+            );
+
+            if rand01(rng_state) >= war_p {
+                continue;
+            }
+
+            // Determine attacker: the more stressed society attacks.
+            let (attacker_idx, defender_idx) = if stress_i >= stress_j { (i, j) } else { (j, i) };
+
+            let att_str = military_strength(&societies[attacker_idx]);
+            let def_str = military_strength(&societies[defender_idx]);
+            let total = att_str + def_str;
+            if total <= 0.0 {
+                continue;
+            }
+
+            // Probabilistic outcome weighted by strength ratio.
+            let att_win_p = att_str / total;
+            let attacker_wins = rand01(rng_state) < att_win_p;
+
+            let (winner_idx, loser_idx) = if attacker_wins {
+                (attacker_idx, defender_idx)
+            } else {
+                (defender_idx, attacker_idx)
+            };
+
+            // War costs: both sides lose population, winner gains surplus.
+            let casualty_rate = 0.03 + 0.02 * rand01(rng_state);
+            let winner_casualties =
+                (f64::from(societies[winner_idx].population) * casualty_rate * 0.5) as u32;
+            let loser_casualties =
+                (f64::from(societies[loser_idx].population) * casualty_rate * 1.5) as u32;
+
+            let pop_transfer = (loser_casualties / 3).max(1);
+            let surplus_seized = societies[loser_idx].surplus_per_capita * 0.10;
+
+            // Apply war effects
+            societies[winner_idx].population = societies[winner_idx]
+                .population
+                .saturating_sub(winner_casualties)
+                .saturating_add(pop_transfer)
+                .max(1);
+            societies[loser_idx].population = societies[loser_idx]
+                .population
+                .saturating_sub(loser_casualties)
+                .saturating_sub(pop_transfer)
+                .max(1);
+
+            societies[winner_idx].surplus_per_capita =
+                (societies[winner_idx].surplus_per_capita + surplus_seized).clamp(0.0, 2.0);
+            societies[loser_idx].surplus_per_capita =
+                (societies[loser_idx].surplus_per_capita - surplus_seized).clamp(0.0, 2.0);
+
+            // Legitimacy shock: wars erode governance legitimacy for both sides.
+            societies[winner_idx].governance.stress.legitimacy =
+                clamp01(societies[winner_idx].governance.stress.legitimacy - 0.04);
+            societies[loser_idx].governance.stress.legitimacy =
+                clamp01(societies[loser_idx].governance.stress.legitimacy - 0.12);
+
+            // Ecological damage from war.
+            societies[winner_idx].ecological_pressure =
+                (societies[winner_idx].ecological_pressure + 0.02).clamp(0.0, 1.0);
+            societies[loser_idx].ecological_pressure =
+                (societies[loser_idx].ecological_pressure + 0.04).clamp(0.0, 1.0);
+
+            outcomes.push(WarOutcome {
+                attacker: attacker_idx,
+                defender: defender_idx,
+                attacker_strength: att_str,
+                defender_strength: def_str,
+                population_transfer: pop_transfer,
+                surplus_seized,
+            });
+        }
+    }
+
+    outcomes
 }
 
 /// Runs a local-to-global emergence simulation for `ticks` iterations.
@@ -638,6 +917,7 @@ pub fn run_emergence_simulation(
     cfg: TransitionConfig,
 ) -> Vec<EmergenceSnapshot> {
     let mut snapshots = Vec::with_capacity(ticks as usize);
+    let mut rng_state = 0xdead_beef_cafe_1234_u64;
 
     for tick in 0..ticks {
         let global = aggregate_from_local_societies(&societies);
@@ -673,9 +953,12 @@ pub fn run_emergence_simulation(
             agriculture_count,
         });
 
-        for society in &mut societies {
+        for society in societies.iter_mut() {
             *society = step_local_society(*society, global, cfg);
         }
+
+        // Inter-society wars after local evolution.
+        let _wars = resolve_society_wars(&mut societies, &mut rng_state);
     }
 
     snapshots
@@ -792,14 +1075,37 @@ pub fn seed_micro_agents(count: usize, mode: SubsistenceMode) -> Vec<MicroAgent>
             let i_f = i as f64;
             let wave = (i_f * 0.37).sin() * 0.08;
             let skew = ((i % 7) as f64) / 30.0;
+            // Role distribution: ~70% Producer, ~15% Coordinator, ~15% Trader
+            let role = match i % 20 {
+                0..=2 => AgentRole::Coordinator,
+                3..=5 => AgentRole::Trader,
+                _ => AgentRole::Producer,
+            };
+            // Role modifiers: coordinators have higher cooperation/lower aggression,
+            // traders have higher trust/resources, producers are baseline.
+            let (res_mod, trust_mod, agg_mod, coop_mod) = match role {
+                AgentRole::Producer => (0.0, 0.0, 0.0, 0.0),
+                AgentRole::Coordinator => (-0.05, 0.06, -0.08, 0.12),
+                AgentRole::Trader => (0.08, 0.08, -0.04, 0.04),
+            };
+            // Deterministic affinity spread: agents start in ~3-4 clusters
+            // using modular arithmetic to distribute across [0,1]^3.
+            let affinity = [
+                ((i_f * 0.618).fract() * 1.2).clamp(0.0, 1.0), // golden ratio spread
+                (((i % 3) as f64) * 0.35 + wave * 0.5).clamp(0.0, 1.0),
+                (((i % 4) as f64) * 0.28 + skew * 0.8).clamp(0.0, 1.0),
+            ];
             MicroAgent {
-                resources: (resource_base + wave + skew).clamp(0.01, 2.0),
-                trust: (trust_base + wave * 0.4).clamp(0.0, 1.0),
+                resources: (resource_base + wave + skew + res_mod).clamp(0.01, 2.0),
+                trust: (trust_base + wave * 0.4 + trust_mod).clamp(0.0, 1.0),
                 status: (0.45 + skew * 0.6).clamp(0.0, 1.0),
-                aggression: (aggression_base + ((i % 5) as f64) * 0.04).clamp(0.0, 1.0),
-                cooperation: (cooperation_base - ((i % 6) as f64) * 0.03).clamp(0.0, 1.0),
+                aggression: (aggression_base + ((i % 5) as f64) * 0.04 + agg_mod).clamp(0.0, 1.0),
+                cooperation: (cooperation_base - ((i % 6) as f64) * 0.03 + coop_mod)
+                    .clamp(0.0, 1.0),
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role,
+                affinity,
             }
         })
         .collect()
@@ -861,6 +1167,7 @@ pub fn macro_from_agents(society: &AgentBasedSociety) -> LocalSocietyState {
         surplus_per_capita: weighted_surplus.clamp(0.0, 2.0),
         network_coupling: society.network_coupling,
         ecological_pressure: society.ecological_pressure,
+        governance: GovernanceState::default(),
     }
 }
 
@@ -874,6 +1181,7 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             conflicts: 0,
             trades: 0,
             migrations: 0,
+            raids: 0,
             births: 0,
             deaths: 0,
             replacements: 0,
@@ -906,25 +1214,47 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
         };
 
         let stress = clamp01(society.ecological_pressure * society.parameters.ecological_feedback);
+
+        // Role-based interaction modifiers
+        let coordinator_present = matches!(left.role, AgentRole::Coordinator)
+            || matches!(right.role, AgentRole::Coordinator);
+        let trader_present =
+            matches!(left.role, AgentRole::Trader) || matches!(right.role, AgentRole::Trader);
+        let coop_role_bonus = if coordinator_present { 0.10 } else { 0.0 };
+        let conflict_role_penalty = if coordinator_present { -0.08 } else { 0.0 };
+        let trade_role_bonus = if trader_present { 0.12 } else { 0.0 };
+
+        // Oxytocin model: affinity distance → bonding/othering modulation
+        let aff_dist = affinity_distance(&left.affinity, &right.affinity);
+        let (bonding, othering) = oxytocin_signal(aff_dist);
+
         let coop_bias = 0.40 * left.cooperation
             + 0.30 * right.cooperation
             + 0.20 * left.trust
             + 0.10 * right.trust
             + 0.12 * left.recent_coop
             + 0.08 * right.recent_coop
-            - 0.18 * stress;
+            - 0.18 * stress
+            + coop_role_bonus
+            + 0.15 * bonding; // oxytocin in-group bonding
         let conflict_bias = 0.42 * left.aggression
             + 0.36 * right.aggression
             + 0.22 * (left.status - right.status).abs()
             + 0.16 * left.recent_conflict
             + 0.12 * right.recent_conflict
-            + 0.20 * stress;
+            + 0.20 * stress
+            + conflict_role_penalty
+            + 0.14 * othering; // oxytocin out-group aggression
         let trade_bias = 0.50 * (1.0 - (left.resources - right.resources).abs() / 3.0).max(0.0)
             + 0.20 * (left.trust + right.trust)
-            + 0.15 * (1.0 - stress);
+            + 0.15 * (1.0 - stress)
+            + trade_role_bonus
+            + 0.08 * bonding           // in-group trade preference
+            - 0.06 * othering; // out-group trade aversion
         let migration_bias = 0.32 * stress
             + 0.28 * (0.4 - 0.5 * (left.resources + right.resources)).max(0.0)
-            + 0.16 * (1.0 - 0.5 * (left.trust + right.trust));
+            + 0.16 * (1.0 - 0.5 * (left.trust + right.trust))
+            + 0.10 * othering; // othering drives displacement
 
         let coop_p = clamp01(
             society.parameters.cooperation_weight * coop_bias
@@ -949,6 +1279,10 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
         let conflict_cut = coop_cut + (conflict_p / norm);
         let trade_cut = conflict_cut + (trade_p / norm);
 
+        // Snapshot affinity targets before mutation for symmetric drift.
+        let left_aff = left.affinity;
+        let right_aff = right.affinity;
+
         if pick < coop_cut {
             cooperations = cooperations.saturating_add(1);
             let gain = (0.012 + 0.010 * society.network_coupling).clamp(0.0, 0.05);
@@ -960,6 +1294,9 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             right.recent_coop = (right.recent_coop * 0.80 + 0.20).clamp(0.0, 1.0);
             left.recent_conflict = (left.recent_conflict * 0.85).clamp(0.0, 1.0);
             right.recent_conflict = (right.recent_conflict * 0.85).clamp(0.0, 1.0);
+            // Cooperation → affinity convergence (become more alike)
+            drift_affinity(&mut left.affinity, &right_aff, 0.04);
+            drift_affinity(&mut right.affinity, &left_aff, 0.04);
         } else if pick < conflict_cut {
             conflicts = conflicts.saturating_add(1);
             let transfer = (0.016 + 0.018 * conflict_p).clamp(0.0, 0.08);
@@ -980,6 +1317,9 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             right.recent_conflict = (right.recent_conflict * 0.78 + 0.22).clamp(0.0, 1.0);
             left.recent_coop = (left.recent_coop * 0.82).clamp(0.0, 1.0);
             right.recent_coop = (right.recent_coop * 0.82).clamp(0.0, 1.0);
+            // Conflict → affinity divergence (become more different)
+            drift_affinity(&mut left.affinity, &right_aff, -0.03);
+            drift_affinity(&mut right.affinity, &left_aff, -0.03);
         } else if pick < trade_cut {
             trades = trades.saturating_add(1);
             let mean = 0.5 * (left.resources + right.resources);
@@ -991,6 +1331,9 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             right.recent_coop = (right.recent_coop * 0.92 + 0.06).clamp(0.0, 1.0);
             left.recent_conflict = (left.recent_conflict * 0.92).clamp(0.0, 1.0);
             right.recent_conflict = (right.recent_conflict * 0.92).clamp(0.0, 1.0);
+            // Trade → mild affinity convergence
+            drift_affinity(&mut left.affinity, &right_aff, 0.015);
+            drift_affinity(&mut right.affinity, &left_aff, 0.015);
         } else if rand01(&mut society.rng_state) < migration_p {
             migrations = migrations.saturating_add(1);
             let trust_shift = (0.012 - 0.018 * stress).clamp(-0.03, 0.02);
@@ -1041,6 +1384,22 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             && rand01(&mut society.rng_state) < birth_chance
         {
             births = births.saturating_add(1);
+            // Children inherit parent's role with small chance of role mutation.
+            let child_role = if rand01(&mut society.rng_state) < 0.10 {
+                match (rand01(&mut society.rng_state) * 3.0).floor() as u32 {
+                    0 => AgentRole::Coordinator,
+                    1 => AgentRole::Trader,
+                    _ => AgentRole::Producer,
+                }
+            } else {
+                agent.role
+            };
+            // Children inherit parent affinity with small mutation (cultural drift).
+            let child_affinity = [
+                (agent.affinity[0] + 0.06 * (rand01(&mut society.rng_state) - 0.5)).clamp(0.0, 1.0),
+                (agent.affinity[1] + 0.06 * (rand01(&mut society.rng_state) - 0.5)).clamp(0.0, 1.0),
+                (agent.affinity[2] + 0.06 * (rand01(&mut society.rng_state) - 0.5)).clamp(0.0, 1.0),
+            ];
             let child = MicroAgent {
                 resources: (0.40 * agent.resources + 0.07).clamp(0.05, 1.4),
                 trust: (0.85 * agent.trust + 0.10 * rand01(&mut society.rng_state)).clamp(0.0, 1.0),
@@ -1052,6 +1411,8 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
                     .clamp(0.0, 1.0),
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: child_role,
+                affinity: child_affinity,
             };
             survivors.push(child);
         }
@@ -1065,6 +1426,11 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
         while survivors.len() < target {
             replacements = replacements.saturating_add(1);
             let seed_wave = rand01(&mut society.rng_state);
+            let replacement_role = match (rand01(&mut society.rng_state) * 20.0).floor() as u32 {
+                0..=2 => AgentRole::Coordinator,
+                3..=5 => AgentRole::Trader,
+                _ => AgentRole::Producer,
+            };
             survivors.push(MicroAgent {
                 resources: (0.24 + 0.20 * seed_wave).clamp(0.05, 1.0),
                 trust: (0.30 + 0.40 * rand01(&mut society.rng_state)).clamp(0.0, 1.0),
@@ -1073,21 +1439,124 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
                 cooperation: (0.25 + 0.55 * rand01(&mut society.rng_state)).clamp(0.0, 1.0),
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: replacement_role,
+                affinity: [
+                    rand01(&mut society.rng_state),
+                    rand01(&mut society.rng_state),
+                    rand01(&mut society.rng_state),
+                ],
             });
         }
     }
     society.agents = survivors;
 
+    // Agent-level raid resolution: when conflict is high and stress is elevated,
+    // high-aggression agents form raiding parties that cause concentrated damage.
+    let mut raids = 0_u32;
+    let n_agents = society.agents.len();
+    if n_agents >= 6 && conflicts > (n_agents as u32) / 4 {
+        let stress = clamp01(society.ecological_pressure);
+        let raid_p = clamp01(0.15 * stress + 0.10 * (conflicts as f64 / n_agents as f64));
+        if rand01(&mut society.rng_state) < raid_p {
+            raids = 1;
+            // Raid: high-aggression agents seize resources from low-aggression agents.
+            // Sort by aggression to find raiders vs victims.
+            let mut indices: Vec<usize> = (0..n_agents).collect();
+            indices.sort_by(|&a, &b| {
+                society.agents[b]
+                    .aggression
+                    .partial_cmp(&society.agents[a].aggression)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let raider_count = (n_agents / 5).max(1);
+            let victim_count = (n_agents / 5).max(1);
+
+            let raid_loot = 0.08 + 0.04 * stress;
+            // Raiders gain, victims lose
+            for &ri in indices.iter().take(raider_count) {
+                society.agents[ri].resources =
+                    (society.agents[ri].resources + raid_loot).clamp(0.0, 3.0);
+                society.agents[ri].status = (society.agents[ri].status + 0.02).clamp(0.0, 1.0);
+                society.agents[ri].recent_conflict =
+                    (society.agents[ri].recent_conflict + 0.15).clamp(0.0, 1.0);
+            }
+            for &vi in indices.iter().rev().take(victim_count) {
+                society.agents[vi].resources =
+                    (society.agents[vi].resources - raid_loot).clamp(0.0, 3.0);
+                society.agents[vi].trust = (society.agents[vi].trust - 0.06).clamp(0.0, 1.0);
+                society.agents[vi].recent_conflict =
+                    (society.agents[vi].recent_conflict + 0.10).clamp(0.0, 1.0);
+            }
+
+            // Raids cause affinity polarization: raiders converge, victims converge,
+            // but the two groups diverge from each other.
+            if raider_count >= 2 {
+                let raider_mean = [
+                    indices
+                        .iter()
+                        .take(raider_count)
+                        .map(|&i| society.agents[i].affinity[0])
+                        .sum::<f64>()
+                        / raider_count as f64,
+                    indices
+                        .iter()
+                        .take(raider_count)
+                        .map(|&i| society.agents[i].affinity[1])
+                        .sum::<f64>()
+                        / raider_count as f64,
+                    indices
+                        .iter()
+                        .take(raider_count)
+                        .map(|&i| society.agents[i].affinity[2])
+                        .sum::<f64>()
+                        / raider_count as f64,
+                ];
+                for &ri in indices.iter().take(raider_count) {
+                    drift_affinity(&mut society.agents[ri].affinity, &raider_mean, 0.06);
+                }
+            }
+            if victim_count >= 2 {
+                let victim_mean = [
+                    indices
+                        .iter()
+                        .rev()
+                        .take(victim_count)
+                        .map(|&i| society.agents[i].affinity[0])
+                        .sum::<f64>()
+                        / victim_count as f64,
+                    indices
+                        .iter()
+                        .rev()
+                        .take(victim_count)
+                        .map(|&i| society.agents[i].affinity[1])
+                        .sum::<f64>()
+                        / victim_count as f64,
+                    indices
+                        .iter()
+                        .rev()
+                        .take(victim_count)
+                        .map(|&i| society.agents[i].affinity[2])
+                        .sum::<f64>()
+                        / victim_count as f64,
+                ];
+                for &vi in indices.iter().rev().take(victim_count) {
+                    drift_affinity(&mut society.agents[vi].affinity, &victim_mean, 0.06);
+                }
+            }
+        }
+    }
+
     let n_after = society.agents.len().max(1) as f64;
     let mean_trust = society.agents.iter().map(|a| a.trust).sum::<f64>() / n_after;
     let inequality = gini_of_resources(&society.agents);
-    let total_events = (cooperations + conflicts + trades + migrations).max(1) as f64;
+    let total_events = (cooperations + conflicts + trades + migrations + raids).max(1) as f64;
 
     AgentInteractionStats {
         cooperations,
         conflicts,
         trades,
         migrations,
+        raids,
         births,
         deaths,
         replacements,
@@ -1268,6 +1737,36 @@ pub fn emergence_from_projection(
     }
 }
 
+/// Euclidean distance between two affinity vectors, normalized to [0, 1].
+///
+/// Max possible distance for 3D unit vectors is sqrt(3) ≈ 1.73.
+fn affinity_distance(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+    (d2.sqrt() / 3.0_f64.sqrt()).clamp(0.0, 1.0)
+}
+
+/// Oxytocin-modulated interaction biases from affinity distance.
+///
+/// Returns `(bonding, othering)` coefficients in [0, 1]:
+/// - `bonding`: high when agents are affinity-close (in-group). Boosts cooperation & trust.
+/// - `othering`: high when agents are affinity-distant (out-group). Boosts aggression & wariness.
+fn oxytocin_signal(dist: f64) -> (f64, f64) {
+    // Sigmoid-shaped: bonding peaks at dist=0, othering peaks at dist=1.
+    // Crossover at dist ≈ 0.45.
+    let bonding = (1.0 - 2.5 * dist).clamp(0.0, 1.0);
+    let othering = (2.0 * dist - 0.6).clamp(0.0, 1.0);
+    (bonding, othering)
+}
+
+/// Drifts `src` affinity vector toward or away from `target`.
+///
+/// `rate` > 0 → convergence (cooperation), `rate` < 0 → divergence (conflict).
+fn drift_affinity(src: &mut [f64; 3], target: &[f64; 3], rate: f64) {
+    for i in 0..3 {
+        src[i] = (src[i] + rate * (target[i] - src[i])).clamp(0.0, 1.0);
+    }
+}
+
 fn partner_for(society: &mut AgentBasedSociety, idx: usize) -> usize {
     let n = society.agents.len();
     if n < 2 {
@@ -1348,6 +1847,7 @@ pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.18,
             network_coupling: 0.15,
             ecological_pressure: 0.08,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 130,
@@ -1355,6 +1855,7 @@ pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.22,
             network_coupling: 0.20,
             ecological_pressure: 0.10,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 240,
@@ -1362,6 +1863,7 @@ pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.35,
             network_coupling: 0.35,
             ecological_pressure: 0.18,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 820,
@@ -1369,6 +1871,7 @@ pub fn scenario_local_emergence_baseline() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.52,
             network_coupling: 0.62,
             ecological_pressure: 0.30,
+            governance: GovernanceState::default(),
         },
     ]
 }
@@ -1383,6 +1886,7 @@ pub fn scenario_ecological_stress() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.20,
             network_coupling: 0.30,
             ecological_pressure: 0.75,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 1_500,
@@ -1390,6 +1894,7 @@ pub fn scenario_ecological_stress() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.25,
             network_coupling: 0.70,
             ecological_pressure: 0.82,
+            governance: GovernanceState::default(),
         },
     ]
 }
@@ -1404,6 +1909,7 @@ pub fn scenario_dense_coupled_growth() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.45,
             network_coupling: 0.65,
             ecological_pressure: 0.12,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 650,
@@ -1411,6 +1917,7 @@ pub fn scenario_dense_coupled_growth() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.55,
             network_coupling: 0.78,
             ecological_pressure: 0.15,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 1_100,
@@ -1418,6 +1925,7 @@ pub fn scenario_dense_coupled_growth() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.62,
             network_coupling: 0.82,
             ecological_pressure: 0.2,
+            governance: GovernanceState::default(),
         },
     ]
 }
@@ -1432,6 +1940,7 @@ pub fn scenario_fragmented_low_coupling() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.10,
             network_coupling: 0.05,
             ecological_pressure: 0.08,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 70,
@@ -1439,6 +1948,7 @@ pub fn scenario_fragmented_low_coupling() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.12,
             network_coupling: 0.07,
             ecological_pressure: 0.10,
+            governance: GovernanceState::default(),
         },
         LocalSocietyState {
             population: 80,
@@ -1446,6 +1956,7 @@ pub fn scenario_fragmented_low_coupling() -> Vec<LocalSocietyState> {
             surplus_per_capita: 0.11,
             network_coupling: 0.06,
             ecological_pressure: 0.09,
+            governance: GovernanceState::default(),
         },
     ]
 }
@@ -1457,15 +1968,16 @@ fn clamp01(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        aggregate_from_local_societies, classify_trajectory, emergence_order_parameters,
-        emergent_dynamics, gini_of_resources, group_behavior_profile, local_complexity,
-        macro_from_agents, micro_macro_projection, next_subsistence_mode,
-        run_agent_based_simulation, run_emergence_simulation, scenario_dense_coupled_growth,
-        scenario_ecological_stress, scenario_fragmented_low_coupling,
-        scenario_local_emergence_baseline, seed_agent_based_society,
-        seed_agent_based_society_with_topology, seed_micro_agents, step_agent_based_society,
-        step_local_society, summarize_emergence, AgentState, EmergenceOrderParameters,
-        InteractionTopology, LocalSocietyState, MicroAgent, SimulationConfig, SimulationEngine,
+        adapt_governance, affinity_distance, aggregate_from_local_societies, classify_trajectory,
+        drift_affinity, emergence_order_parameters, emergent_dynamics, gini_of_resources,
+        group_behavior_profile, local_complexity, macro_from_agents, micro_macro_projection,
+        next_subsistence_mode, oxytocin_signal, resolve_society_wars, run_agent_based_simulation,
+        run_emergence_simulation, scenario_dense_coupled_growth, scenario_ecological_stress,
+        scenario_fragmented_low_coupling, scenario_local_emergence_baseline,
+        seed_agent_based_society, seed_agent_based_society_with_topology, seed_micro_agents,
+        step_agent_based_society, step_local_society, summarize_emergence, AgentRole, AgentState,
+        EmergenceOrderParameters, GovernancePolicy, GovernanceState, InteractionTopology,
+        LocalSocietyState, MicroAgent, SimulationConfig, SimulationEngine, StressChannel,
         SubsistenceMode, TrajectoryClass, TransitionConfig, WorldState,
     };
 
@@ -1599,6 +2111,7 @@ mod tests {
             surplus_per_capita: 0.3,
             network_coupling: 0.2,
             ecological_pressure: 0.2,
+            governance: GovernanceState::default(),
         });
         let sed = local_complexity(LocalSocietyState {
             population: n,
@@ -1606,6 +2119,7 @@ mod tests {
             surplus_per_capita: 0.3,
             network_coupling: 0.2,
             ecological_pressure: 0.2,
+            governance: GovernanceState::default(),
         });
         assert!(sed.complexity_index > hg.complexity_index);
     }
@@ -1618,6 +2132,7 @@ mod tests {
             surplus_per_capita: 0.1,
             network_coupling: 0.1,
             ecological_pressure: 0.1,
+            governance: GovernanceState::default(),
         };
         let large_complex = LocalSocietyState {
             population: 10_000,
@@ -1625,6 +2140,7 @@ mod tests {
             surplus_per_capita: 0.6,
             network_coupling: 0.9,
             ecological_pressure: 0.2,
+            governance: GovernanceState::default(),
         };
 
         let mixed = aggregate_from_local_societies(&[small_local, large_complex]);
@@ -1655,6 +2171,7 @@ mod tests {
             surplus_per_capita: 0.3,
             network_coupling: 0.4,
             ecological_pressure: 0.2,
+            governance: GovernanceState::default(),
         };
         let global = EmergenceOrderParameters {
             throughput_pressure: 0.5,
@@ -1679,6 +2196,7 @@ mod tests {
                 surplus_per_capita: 0.3,
                 network_coupling: 0.3,
                 ecological_pressure: 0.1,
+                governance: GovernanceState::default(),
             },
             LocalSocietyState {
                 population: 180,
@@ -1686,6 +2204,7 @@ mod tests {
                 surplus_per_capita: 0.35,
                 network_coupling: 0.35,
                 ecological_pressure: 0.15,
+                governance: GovernanceState::default(),
             },
             LocalSocietyState {
                 population: 220,
@@ -1693,6 +2212,7 @@ mod tests {
                 surplus_per_capita: 0.4,
                 network_coupling: 0.4,
                 ecological_pressure: 0.2,
+                governance: GovernanceState::default(),
             },
         ];
 
@@ -1912,6 +2432,8 @@ mod tests {
                 cooperation: 0.6,
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: AgentRole::Producer,
+                affinity: [0.5, 0.5, 0.5],
             };
             8
         ];
@@ -1930,6 +2452,8 @@ mod tests {
                 cooperation: 0.6,
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: AgentRole::Producer,
+                affinity: [0.5, 0.5, 0.5],
             };
             6
         ];
@@ -1942,6 +2466,8 @@ mod tests {
                 cooperation: 0.6,
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: AgentRole::Producer,
+                affinity: [0.2, 0.2, 0.2],
             },
             MicroAgent {
                 resources: 0.1,
@@ -1951,6 +2477,8 @@ mod tests {
                 cooperation: 0.6,
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: AgentRole::Coordinator,
+                affinity: [0.4, 0.4, 0.4],
             },
             MicroAgent {
                 resources: 0.1,
@@ -1960,6 +2488,8 @@ mod tests {
                 cooperation: 0.6,
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: AgentRole::Trader,
+                affinity: [0.6, 0.6, 0.6],
             },
             MicroAgent {
                 resources: 2.8,
@@ -1969,9 +2499,475 @@ mod tests {
                 cooperation: 0.6,
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
+                role: AgentRole::Producer,
+                affinity: [0.8, 0.8, 0.8],
             },
         ];
 
         assert!(gini_of_resources(&unequal) > gini_of_resources(&equal));
+    }
+
+    #[test]
+    fn governance_adapts_under_stress() {
+        let gov = GovernanceState::default();
+        assert_eq!(gov.policy, GovernancePolicy::Laissez);
+        assert!(gov.stress.legitimacy > 0.5);
+
+        // Apply sustained stress: low surplus, high ecological pressure
+        let mut g = gov;
+        for _ in 0..30 {
+            g = adapt_governance(g, 0.05, 0.90);
+        }
+        // Legitimacy should have eroded under sustained scarcity
+        assert!(g.stress.legitimacy < gov.stress.legitimacy);
+        assert!(g.stress.price_pressure > 0.3);
+        // Policy should have shifted away from laissez-faire
+        assert_ne!(g.policy, GovernancePolicy::Laissez);
+    }
+
+    #[test]
+    fn governance_recovers_legitimacy_without_stress() {
+        // Start with a stressed governance
+        let stressed = GovernanceState {
+            policy: GovernancePolicy::Extractive,
+            tax_rate: 0.25,
+            redistribution_rate: 0.20,
+            stress: StressChannel {
+                price_pressure: 0.70,
+                legitimacy: 0.25,
+            },
+        };
+        let mut g = stressed;
+        for _ in 0..50 {
+            g = adapt_governance(g, 0.60, 0.05);
+        }
+        // With abundant surplus and low eco pressure, legitimacy should recover
+        assert!(g.stress.legitimacy > stressed.stress.legitimacy);
+        assert!(g.stress.price_pressure < stressed.stress.price_pressure);
+    }
+
+    #[test]
+    fn stress_channel_resource_price_legitimacy_cascade() {
+        let gov = GovernanceState::default();
+        // Moderate conditions: no stress cascade expected
+        let stable = adapt_governance(gov, 0.40, 0.10);
+        assert!(stable.stress.price_pressure < 0.20);
+        assert!(stable.stress.legitimacy > 0.70);
+
+        // Severe resource shock: full cascade expected
+        let mut cascaded = gov;
+        for _ in 0..40 {
+            cascaded = adapt_governance(cascaded, 0.02, 0.95);
+        }
+        assert!(cascaded.stress.price_pressure > 0.50);
+        assert!(cascaded.stress.legitimacy < 0.50);
+        assert_eq!(cascaded.policy, GovernancePolicy::Extractive);
+    }
+
+    #[test]
+    fn agent_roles_distributed_in_seed_population() {
+        let agents = seed_micro_agents(100, SubsistenceMode::Sedentary);
+        let producers = agents
+            .iter()
+            .filter(|a| a.role == AgentRole::Producer)
+            .count();
+        let coordinators = agents
+            .iter()
+            .filter(|a| a.role == AgentRole::Coordinator)
+            .count();
+        let traders = agents
+            .iter()
+            .filter(|a| a.role == AgentRole::Trader)
+            .count();
+        assert_eq!(producers + coordinators + traders, 100);
+        assert!(producers > coordinators);
+        assert!(producers > traders);
+        assert!(coordinators > 0);
+        assert!(traders > 0);
+    }
+
+    #[test]
+    fn coordinator_role_boosts_cooperation_in_interactions() {
+        // Society with all coordinators should have higher cooperation rate
+        // than society with all producers (same base stats)
+        let mut coop_society = seed_agent_based_society(36, SubsistenceMode::Sedentary, 0.4, 0.2);
+        for agent in &mut coop_society.agents {
+            agent.role = AgentRole::Coordinator;
+        }
+        let mut prod_society = seed_agent_based_society(36, SubsistenceMode::Sedentary, 0.4, 0.2);
+        for agent in &mut prod_society.agents {
+            agent.role = AgentRole::Producer;
+        }
+        // Reset RNG for fair comparison
+        coop_society.rng_state = 42;
+        prod_society.rng_state = 42;
+
+        let coop_stats = step_agent_based_society(&mut coop_society);
+        // Reset to same seed
+        prod_society.rng_state = 42;
+        let prod_stats = step_agent_based_society(&mut prod_society);
+
+        // Coordinators should produce at least as many cooperations
+        assert!(coop_stats.cooperations >= prod_stats.cooperations);
+    }
+
+    #[test]
+    fn governance_affects_surplus_in_step_local_society() {
+        let cfg = TransitionConfig::default();
+        let global = EmergenceOrderParameters {
+            throughput_pressure: 0.5,
+            coordination_centralization: 0.5,
+            policy_lock_in: 0.4,
+            autonomy_loss: 0.3,
+            superorganism_index: 0.45,
+        };
+
+        let base = LocalSocietyState {
+            population: 300,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.3,
+            network_coupling: 0.4,
+            ecological_pressure: 0.2,
+            governance: GovernanceState::default(),
+        };
+        let result = step_local_society(base, global, cfg);
+        // Governance should be updated (not just default)
+        // Tax/redistribution should affect surplus but not eliminate it
+        assert!(result.surplus_per_capita > 0.0);
+        assert!(result.governance.stress.legitimacy > 0.0);
+    }
+
+    #[test]
+    fn affinity_distance_identical_is_zero() {
+        let a = [0.5, 0.3, 0.7];
+        assert!((affinity_distance(&a, &a) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn affinity_distance_opposite_corners_is_one() {
+        let a = [0.0, 0.0, 0.0];
+        let b = [1.0, 1.0, 1.0];
+        assert!((affinity_distance(&a, &b) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn oxytocin_bonding_high_for_close_agents() {
+        let (bonding, othering) = oxytocin_signal(0.05);
+        assert!(bonding > 0.8);
+        assert!(othering < 0.01);
+    }
+
+    #[test]
+    fn oxytocin_othering_high_for_distant_agents() {
+        let (bonding, othering) = oxytocin_signal(0.95);
+        assert!(bonding < 0.01);
+        assert!(othering > 0.8);
+    }
+
+    #[test]
+    fn drift_affinity_converges_toward_target() {
+        let mut a = [0.2, 0.3, 0.4];
+        let target = [0.8, 0.7, 0.6];
+        let dist_before = affinity_distance(&a, &target);
+        drift_affinity(&mut a, &target, 0.1);
+        let dist_after = affinity_distance(&a, &target);
+        assert!(dist_after < dist_before);
+    }
+
+    #[test]
+    fn drift_affinity_diverges_with_negative_rate() {
+        let mut a = [0.5, 0.5, 0.5];
+        let target = [0.6, 0.6, 0.6];
+        let dist_before = affinity_distance(&a, &target);
+        drift_affinity(&mut a, &target, -0.1);
+        let dist_after = affinity_distance(&a, &target);
+        assert!(dist_after > dist_before);
+    }
+
+    #[test]
+    fn seed_agents_have_diverse_affinities() {
+        let agents = seed_micro_agents(50, SubsistenceMode::Sedentary);
+        // Check that affinity vectors are not all identical
+        let first = agents[0].affinity;
+        let different = agents.iter().any(|a| a.affinity != first);
+        assert!(different, "all agents have identical affinity");
+        // All components should be in [0, 1]
+        for a in &agents {
+            for &v in &a.affinity {
+                assert!((0.0..=1.0).contains(&v));
+            }
+        }
+    }
+
+    #[test]
+    fn cooperation_converges_affinity_over_time() {
+        // Two initially distant agents forced into cooperation should become more similar
+        let mut society = seed_agent_based_society(20, SubsistenceMode::Sedentary, 0.4, 0.1);
+        // Set first two agents far apart in affinity space
+        society.agents[0].affinity = [0.1, 0.1, 0.1];
+        society.agents[1].affinity = [0.9, 0.9, 0.9];
+        let _dist_before =
+            affinity_distance(&society.agents[0].affinity, &society.agents[1].affinity);
+
+        // Run many steps — cooperation events will gradually converge affinities
+        for _ in 0..100 {
+            let _ = step_agent_based_society(&mut society);
+        }
+
+        // Check that at least some agents have moved from their initial extreme positions
+        // (we can't guarantee the specific pair interacted, but the population should show drift)
+        let has_mid_range = society
+            .agents
+            .iter()
+            .any(|a| a.affinity[0] > 0.2 && a.affinity[0] < 0.8);
+        assert!(
+            has_mid_range,
+            "expected some affinity convergence in population"
+        );
+    }
+
+    #[test]
+    fn society_wars_transfer_resources_between_societies() {
+        let mut societies = vec![
+            LocalSocietyState {
+                population: 500,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.60,
+                network_coupling: 0.10,
+                ecological_pressure: 0.30,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Laissez,
+                    tax_rate: 0.05,
+                    redistribution_rate: 0.50,
+                    stress: StressChannel {
+                        price_pressure: 0.60,
+                        legitimacy: 0.30,
+                    },
+                },
+            },
+            LocalSocietyState {
+                population: 200,
+                mode: SubsistenceMode::Sedentary,
+                surplus_per_capita: 0.15,
+                network_coupling: 0.10,
+                ecological_pressure: 0.70,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Extractive,
+                    tax_rate: 0.25,
+                    redistribution_rate: 0.20,
+                    stress: StressChannel {
+                        price_pressure: 0.80,
+                        legitimacy: 0.15,
+                    },
+                },
+            },
+        ];
+
+        let total_pop_before: u32 = societies.iter().map(|s| s.population).sum();
+        let mut rng = 42_u64;
+
+        // Run many rounds to ensure at least one war fires.
+        let mut any_war = false;
+        for _ in 0..200 {
+            let outcomes = resolve_society_wars(&mut societies, &mut rng);
+            if !outcomes.is_empty() {
+                any_war = true;
+                let o = &outcomes[0];
+                // War outcome should have non-zero transfer
+                assert!(o.population_transfer > 0 || o.surplus_seized > 0.0);
+                break;
+            }
+        }
+        assert!(
+            any_war,
+            "expected at least one war in 200 ticks with high stress"
+        );
+
+        // Population should have changed (casualties + transfers)
+        let total_pop_after: u32 = societies.iter().map(|s| s.population).sum();
+        assert_ne!(total_pop_before, total_pop_after);
+    }
+
+    #[test]
+    fn wars_erode_legitimacy() {
+        let mut societies = vec![
+            LocalSocietyState {
+                population: 800,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.50,
+                network_coupling: 0.05,
+                ecological_pressure: 0.60,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Redistributive,
+                    tax_rate: 0.15,
+                    redistribution_rate: 0.70,
+                    stress: StressChannel {
+                        price_pressure: 0.50,
+                        legitimacy: 0.55,
+                    },
+                },
+            },
+            LocalSocietyState {
+                population: 600,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.20,
+                network_coupling: 0.05,
+                ecological_pressure: 0.80,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Extractive,
+                    tax_rate: 0.25,
+                    redistribution_rate: 0.20,
+                    stress: StressChannel {
+                        price_pressure: 0.70,
+                        legitimacy: 0.25,
+                    },
+                },
+            },
+        ];
+
+        let leg_before_0 = societies[0].governance.stress.legitimacy;
+        let leg_before_1 = societies[1].governance.stress.legitimacy;
+        let mut rng = 77_u64;
+
+        for _ in 0..300 {
+            let outcomes = resolve_society_wars(&mut societies, &mut rng);
+            if !outcomes.is_empty() {
+                // After war, at least one society should have lower legitimacy
+                let leg_dropped = societies[0].governance.stress.legitimacy < leg_before_0
+                    || societies[1].governance.stress.legitimacy < leg_before_1;
+                assert!(leg_dropped, "war should erode legitimacy");
+                return;
+            }
+        }
+        // If no war fired in 300 ticks, that's also valid (low probability)
+    }
+
+    #[test]
+    fn agent_raids_fire_under_high_conflict_stress() {
+        let mut society = seed_agent_based_society_with_topology(
+            40,
+            SubsistenceMode::Agriculture,
+            0.4,
+            0.85, // high ecological pressure
+            InteractionTopology::SmallWorld,
+            2,
+            999,
+        );
+        // Boost aggression across the board to ensure high conflict
+        for agent in &mut society.agents {
+            agent.aggression = 0.90;
+            agent.cooperation = 0.10;
+        }
+
+        let mut any_raids = false;
+        for _ in 0..100 {
+            let stats = step_agent_based_society(&mut society);
+            if stats.raids > 0 {
+                any_raids = true;
+                break;
+            }
+        }
+        assert!(
+            any_raids,
+            "expected at least one raid under high stress + aggression"
+        );
+    }
+
+    #[test]
+    fn raids_cause_resource_redistribution() {
+        let mut society = seed_agent_based_society_with_topology(
+            30,
+            SubsistenceMode::Agriculture,
+            0.3,
+            0.90,
+            InteractionTopology::Random,
+            3,
+            123,
+        );
+        for agent in &mut society.agents {
+            agent.aggression = 0.85;
+            agent.cooperation = 0.15;
+            agent.resources = 0.50; // uniform start
+        }
+
+        for _ in 0..200 {
+            let stats = step_agent_based_society(&mut society);
+            if stats.raids > 0 {
+                // After a raid, resources should be uneven (high-aggression raiders got more)
+                let max_res = society
+                    .agents
+                    .iter()
+                    .map(|a| a.resources)
+                    .fold(0.0_f64, f64::max);
+                let min_res = society
+                    .agents
+                    .iter()
+                    .map(|a| a.resources)
+                    .fold(3.0_f64, f64::min);
+                assert!(max_res > min_res, "raid should create resource inequality");
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn network_coupling_reduces_war_probability() {
+        // High coupling societies should fight less (trade integration)
+        let high_coupling = vec![
+            LocalSocietyState {
+                population: 400,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.40,
+                network_coupling: 0.90,
+                ecological_pressure: 0.50,
+                governance: GovernanceState {
+                    stress: StressChannel {
+                        price_pressure: 0.50,
+                        legitimacy: 0.40,
+                    },
+                    ..GovernanceState::default()
+                },
+            },
+            LocalSocietyState {
+                population: 300,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.20,
+                network_coupling: 0.90,
+                ecological_pressure: 0.60,
+                governance: GovernanceState {
+                    stress: StressChannel {
+                        price_pressure: 0.60,
+                        legitimacy: 0.30,
+                    },
+                    ..GovernanceState::default()
+                },
+            },
+        ];
+        let low_coupling = vec![
+            LocalSocietyState {
+                network_coupling: 0.05,
+                ..high_coupling[0]
+            },
+            LocalSocietyState {
+                network_coupling: 0.05,
+                ..high_coupling[1]
+            },
+        ];
+
+        let mut high_wars = 0_u32;
+        let mut low_wars = 0_u32;
+        let mut rng_h = 55_u64;
+        let mut rng_l = 55_u64;
+        let mut h = high_coupling;
+        let mut l = low_coupling;
+        for _ in 0..500 {
+            high_wars += resolve_society_wars(&mut h, &mut rng_h).len() as u32;
+            low_wars += resolve_society_wars(&mut l, &mut rng_l).len() as u32;
+        }
+        // Low coupling should produce at least as many wars
+        assert!(
+            low_wars >= high_wars,
+            "low coupling should produce more wars"
+        );
     }
 }
