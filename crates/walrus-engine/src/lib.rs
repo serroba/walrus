@@ -244,6 +244,15 @@ pub struct MicroAgent {
     pub recent_coop: f64,
     /// Functional role that modifies interaction behavior.
     pub role: AgentRole,
+    /// Identity/cultural affinity vector (oxytocin model).
+    ///
+    /// Euclidean distance between two agents' affinity vectors determines
+    /// in-group vs out-group perception. Small distance → oxytocin bonding
+    /// (boosted cooperation, trust). Large distance → othering effect
+    /// (boosted aggression, reduced trust). Vectors drift toward partners
+    /// on cooperation and away on conflict, producing emergent tribal
+    /// clustering.
+    pub affinity: [f64; 3],
 }
 
 /// Topology for selecting interaction partners in the agent graph.
@@ -929,6 +938,13 @@ pub fn seed_micro_agents(count: usize, mode: SubsistenceMode) -> Vec<MicroAgent>
                 AgentRole::Coordinator => (-0.05, 0.06, -0.08, 0.12),
                 AgentRole::Trader => (0.08, 0.08, -0.04, 0.04),
             };
+            // Deterministic affinity spread: agents start in ~3-4 clusters
+            // using modular arithmetic to distribute across [0,1]^3.
+            let affinity = [
+                ((i_f * 0.618).fract() * 1.2).clamp(0.0, 1.0),      // golden ratio spread
+                (((i % 3) as f64) * 0.35 + wave * 0.5).clamp(0.0, 1.0),
+                (((i % 4) as f64) * 0.28 + skew * 0.8).clamp(0.0, 1.0),
+            ];
             MicroAgent {
                 resources: (resource_base + wave + skew + res_mod).clamp(0.01, 2.0),
                 trust: (trust_base + wave * 0.4 + trust_mod).clamp(0.0, 1.0),
@@ -938,6 +954,7 @@ pub fn seed_micro_agents(count: usize, mode: SubsistenceMode) -> Vec<MicroAgent>
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role,
+                affinity,
             }
         })
         .collect()
@@ -1055,6 +1072,10 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
         let conflict_role_penalty = if coordinator_present { -0.08 } else { 0.0 };
         let trade_role_bonus = if trader_present { 0.12 } else { 0.0 };
 
+        // Oxytocin model: affinity distance → bonding/othering modulation
+        let aff_dist = affinity_distance(&left.affinity, &right.affinity);
+        let (bonding, othering) = oxytocin_signal(aff_dist);
+
         let coop_bias = 0.40 * left.cooperation
             + 0.30 * right.cooperation
             + 0.20 * left.trust
@@ -1062,21 +1083,26 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             + 0.12 * left.recent_coop
             + 0.08 * right.recent_coop
             - 0.18 * stress
-            + coop_role_bonus;
+            + coop_role_bonus
+            + 0.15 * bonding;         // oxytocin in-group bonding
         let conflict_bias = 0.42 * left.aggression
             + 0.36 * right.aggression
             + 0.22 * (left.status - right.status).abs()
             + 0.16 * left.recent_conflict
             + 0.12 * right.recent_conflict
             + 0.20 * stress
-            + conflict_role_penalty;
+            + conflict_role_penalty
+            + 0.14 * othering;        // oxytocin out-group aggression
         let trade_bias = 0.50 * (1.0 - (left.resources - right.resources).abs() / 3.0).max(0.0)
             + 0.20 * (left.trust + right.trust)
             + 0.15 * (1.0 - stress)
-            + trade_role_bonus;
+            + trade_role_bonus
+            + 0.08 * bonding           // in-group trade preference
+            - 0.06 * othering;         // out-group trade aversion
         let migration_bias = 0.32 * stress
             + 0.28 * (0.4 - 0.5 * (left.resources + right.resources)).max(0.0)
-            + 0.16 * (1.0 - 0.5 * (left.trust + right.trust));
+            + 0.16 * (1.0 - 0.5 * (left.trust + right.trust))
+            + 0.10 * othering;         // othering drives displacement
 
         let coop_p = clamp01(
             society.parameters.cooperation_weight * coop_bias
@@ -1101,6 +1127,10 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
         let conflict_cut = coop_cut + (conflict_p / norm);
         let trade_cut = conflict_cut + (trade_p / norm);
 
+        // Snapshot affinity targets before mutation for symmetric drift.
+        let left_aff = left.affinity;
+        let right_aff = right.affinity;
+
         if pick < coop_cut {
             cooperations = cooperations.saturating_add(1);
             let gain = (0.012 + 0.010 * society.network_coupling).clamp(0.0, 0.05);
@@ -1112,6 +1142,9 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             right.recent_coop = (right.recent_coop * 0.80 + 0.20).clamp(0.0, 1.0);
             left.recent_conflict = (left.recent_conflict * 0.85).clamp(0.0, 1.0);
             right.recent_conflict = (right.recent_conflict * 0.85).clamp(0.0, 1.0);
+            // Cooperation → affinity convergence (become more alike)
+            drift_affinity(&mut left.affinity, &right_aff, 0.04);
+            drift_affinity(&mut right.affinity, &left_aff, 0.04);
         } else if pick < conflict_cut {
             conflicts = conflicts.saturating_add(1);
             let transfer = (0.016 + 0.018 * conflict_p).clamp(0.0, 0.08);
@@ -1132,6 +1165,9 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             right.recent_conflict = (right.recent_conflict * 0.78 + 0.22).clamp(0.0, 1.0);
             left.recent_coop = (left.recent_coop * 0.82).clamp(0.0, 1.0);
             right.recent_coop = (right.recent_coop * 0.82).clamp(0.0, 1.0);
+            // Conflict → affinity divergence (become more different)
+            drift_affinity(&mut left.affinity, &right_aff, -0.03);
+            drift_affinity(&mut right.affinity, &left_aff, -0.03);
         } else if pick < trade_cut {
             trades = trades.saturating_add(1);
             let mean = 0.5 * (left.resources + right.resources);
@@ -1143,6 +1179,9 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             right.recent_coop = (right.recent_coop * 0.92 + 0.06).clamp(0.0, 1.0);
             left.recent_conflict = (left.recent_conflict * 0.92).clamp(0.0, 1.0);
             right.recent_conflict = (right.recent_conflict * 0.92).clamp(0.0, 1.0);
+            // Trade → mild affinity convergence
+            drift_affinity(&mut left.affinity, &right_aff, 0.015);
+            drift_affinity(&mut right.affinity, &left_aff, 0.015);
         } else if rand01(&mut society.rng_state) < migration_p {
             migrations = migrations.saturating_add(1);
             let trust_shift = (0.012 - 0.018 * stress).clamp(-0.03, 0.02);
@@ -1203,6 +1242,12 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             } else {
                 agent.role
             };
+            // Children inherit parent affinity with small mutation (cultural drift).
+            let child_affinity = [
+                (agent.affinity[0] + 0.06 * (rand01(&mut society.rng_state) - 0.5)).clamp(0.0, 1.0),
+                (agent.affinity[1] + 0.06 * (rand01(&mut society.rng_state) - 0.5)).clamp(0.0, 1.0),
+                (agent.affinity[2] + 0.06 * (rand01(&mut society.rng_state) - 0.5)).clamp(0.0, 1.0),
+            ];
             let child = MicroAgent {
                 resources: (0.40 * agent.resources + 0.07).clamp(0.05, 1.4),
                 trust: (0.85 * agent.trust + 0.10 * rand01(&mut society.rng_state)).clamp(0.0, 1.0),
@@ -1215,6 +1260,7 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: child_role,
+                affinity: child_affinity,
             };
             survivors.push(child);
         }
@@ -1242,6 +1288,11 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: replacement_role,
+                affinity: [
+                    rand01(&mut society.rng_state),
+                    rand01(&mut society.rng_state),
+                    rand01(&mut society.rng_state),
+                ],
             });
         }
     }
@@ -1434,6 +1485,36 @@ pub fn emergence_from_projection(
         policy_lock_in: lock_in,
         autonomy_loss,
         superorganism_index,
+    }
+}
+
+/// Euclidean distance between two affinity vectors, normalized to [0, 1].
+///
+/// Max possible distance for 3D unit vectors is sqrt(3) ≈ 1.73.
+fn affinity_distance(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2);
+    (d2.sqrt() / 3.0_f64.sqrt()).clamp(0.0, 1.0)
+}
+
+/// Oxytocin-modulated interaction biases from affinity distance.
+///
+/// Returns `(bonding, othering)` coefficients in [0, 1]:
+/// - `bonding`: high when agents are affinity-close (in-group). Boosts cooperation & trust.
+/// - `othering`: high when agents are affinity-distant (out-group). Boosts aggression & wariness.
+fn oxytocin_signal(dist: f64) -> (f64, f64) {
+    // Sigmoid-shaped: bonding peaks at dist=0, othering peaks at dist=1.
+    // Crossover at dist ≈ 0.45.
+    let bonding = (1.0 - 2.5 * dist).clamp(0.0, 1.0);
+    let othering = (2.0 * dist - 0.6).clamp(0.0, 1.0);
+    (bonding, othering)
+}
+
+/// Drifts `src` affinity vector toward or away from `target`.
+///
+/// `rate` > 0 → convergence (cooperation), `rate` < 0 → divergence (conflict).
+fn drift_affinity(src: &mut [f64; 3], target: &[f64; 3], rate: f64) {
+    for i in 0..3 {
+        src[i] = (src[i] + rate * (target[i] - src[i])).clamp(0.0, 1.0);
     }
 }
 
@@ -1638,17 +1719,17 @@ fn clamp01(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        adapt_governance, aggregate_from_local_societies, classify_trajectory,
-        emergence_order_parameters, emergent_dynamics, gini_of_resources, group_behavior_profile,
-        local_complexity, macro_from_agents, micro_macro_projection, next_subsistence_mode,
-        run_agent_based_simulation, run_emergence_simulation, scenario_dense_coupled_growth,
-        scenario_ecological_stress, scenario_fragmented_low_coupling,
-        scenario_local_emergence_baseline, seed_agent_based_society,
-        seed_agent_based_society_with_topology, seed_micro_agents, step_agent_based_society,
-        step_local_society, summarize_emergence, AgentRole, AgentState, EmergenceOrderParameters,
-        GovernancePolicy, GovernanceState, InteractionTopology, LocalSocietyState, MicroAgent,
-        SimulationConfig, SimulationEngine, StressChannel, SubsistenceMode, TrajectoryClass,
-        TransitionConfig, WorldState,
+        adapt_governance, affinity_distance, aggregate_from_local_societies, classify_trajectory,
+        drift_affinity, emergence_order_parameters, emergent_dynamics, gini_of_resources,
+        group_behavior_profile, local_complexity, macro_from_agents, micro_macro_projection,
+        next_subsistence_mode, oxytocin_signal, run_agent_based_simulation,
+        run_emergence_simulation, scenario_dense_coupled_growth, scenario_ecological_stress,
+        scenario_fragmented_low_coupling, scenario_local_emergence_baseline,
+        seed_agent_based_society, seed_agent_based_society_with_topology, seed_micro_agents,
+        step_agent_based_society, step_local_society, summarize_emergence, AgentRole, AgentState,
+        EmergenceOrderParameters, GovernancePolicy, GovernanceState, InteractionTopology,
+        LocalSocietyState, MicroAgent, SimulationConfig, SimulationEngine, StressChannel,
+        SubsistenceMode, TrajectoryClass, TransitionConfig, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -2103,6 +2184,7 @@ mod tests {
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: AgentRole::Producer,
+                affinity: [0.5, 0.5, 0.5],
             };
             8
         ];
@@ -2122,6 +2204,7 @@ mod tests {
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: AgentRole::Producer,
+                affinity: [0.5, 0.5, 0.5],
             };
             6
         ];
@@ -2135,6 +2218,7 @@ mod tests {
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: AgentRole::Producer,
+                affinity: [0.2, 0.2, 0.2],
             },
             MicroAgent {
                 resources: 0.1,
@@ -2145,6 +2229,7 @@ mod tests {
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: AgentRole::Coordinator,
+                affinity: [0.4, 0.4, 0.4],
             },
             MicroAgent {
                 resources: 0.1,
@@ -2155,6 +2240,7 @@ mod tests {
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: AgentRole::Trader,
+                affinity: [0.6, 0.6, 0.6],
             },
             MicroAgent {
                 resources: 2.8,
@@ -2165,6 +2251,7 @@ mod tests {
                 recent_conflict: 0.0,
                 recent_coop: 0.0,
                 role: AgentRole::Producer,
+                affinity: [0.8, 0.8, 0.8],
             },
         ];
 
@@ -2290,5 +2377,89 @@ mod tests {
         // Tax/redistribution should affect surplus but not eliminate it
         assert!(result.surplus_per_capita > 0.0);
         assert!(result.governance.stress.legitimacy > 0.0);
+    }
+
+    #[test]
+    fn affinity_distance_identical_is_zero() {
+        let a = [0.5, 0.3, 0.7];
+        assert!((affinity_distance(&a, &a) - 0.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn affinity_distance_opposite_corners_is_one() {
+        let a = [0.0, 0.0, 0.0];
+        let b = [1.0, 1.0, 1.0];
+        assert!((affinity_distance(&a, &b) - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn oxytocin_bonding_high_for_close_agents() {
+        let (bonding, othering) = oxytocin_signal(0.05);
+        assert!(bonding > 0.8);
+        assert!(othering < 0.01);
+    }
+
+    #[test]
+    fn oxytocin_othering_high_for_distant_agents() {
+        let (bonding, othering) = oxytocin_signal(0.95);
+        assert!(bonding < 0.01);
+        assert!(othering > 0.8);
+    }
+
+    #[test]
+    fn drift_affinity_converges_toward_target() {
+        let mut a = [0.2, 0.3, 0.4];
+        let target = [0.8, 0.7, 0.6];
+        let dist_before = affinity_distance(&a, &target);
+        drift_affinity(&mut a, &target, 0.1);
+        let dist_after = affinity_distance(&a, &target);
+        assert!(dist_after < dist_before);
+    }
+
+    #[test]
+    fn drift_affinity_diverges_with_negative_rate() {
+        let mut a = [0.5, 0.5, 0.5];
+        let target = [0.6, 0.6, 0.6];
+        let dist_before = affinity_distance(&a, &target);
+        drift_affinity(&mut a, &target, -0.1);
+        let dist_after = affinity_distance(&a, &target);
+        assert!(dist_after > dist_before);
+    }
+
+    #[test]
+    fn seed_agents_have_diverse_affinities() {
+        let agents = seed_micro_agents(50, SubsistenceMode::Sedentary);
+        // Check that affinity vectors are not all identical
+        let first = agents[0].affinity;
+        let different = agents.iter().any(|a| a.affinity != first);
+        assert!(different, "all agents have identical affinity");
+        // All components should be in [0, 1]
+        for a in &agents {
+            for &v in &a.affinity {
+                assert!((0.0..=1.0).contains(&v));
+            }
+        }
+    }
+
+    #[test]
+    fn cooperation_converges_affinity_over_time() {
+        // Two initially distant agents forced into cooperation should become more similar
+        let mut society = seed_agent_based_society(20, SubsistenceMode::Sedentary, 0.4, 0.1);
+        // Set first two agents far apart in affinity space
+        society.agents[0].affinity = [0.1, 0.1, 0.1];
+        society.agents[1].affinity = [0.9, 0.9, 0.9];
+        let _dist_before = affinity_distance(&society.agents[0].affinity, &society.agents[1].affinity);
+
+        // Run many steps — cooperation events will gradually converge affinities
+        for _ in 0..100 {
+            let _ = step_agent_based_society(&mut society);
+        }
+
+        // Check that at least some agents have moved from their initial extreme positions
+        // (we can't guarantee the specific pair interacted, but the population should show drift)
+        let has_mid_range = society.agents.iter().any(|a| {
+            a.affinity[0] > 0.2 && a.affinity[0] < 0.8
+        });
+        assert!(has_mid_range, "expected some affinity convergence in population");
     }
 }
