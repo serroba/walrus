@@ -1,3 +1,5 @@
+use rayon::prelude::*;
+
 use crate::{LocalSocietyState, SubsistenceMode};
 
 /// Dunbar reference sizes used to classify social scale transitions.
@@ -440,119 +442,180 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
     let mut snapshots = Vec::with_capacity(config.generations as usize);
 
     for generation in 0..config.generations {
-        let mut collapse_events = 0_u32;
         let continent_counts = per_continent_counts(&societies, map.continents.len());
+        // Snapshot continent states so all societies act on the same world view.
+        let state_snapshot: Vec<ContinentState> = map.states.clone();
 
-        for society in &mut societies {
-            let c_idx = society.continent;
-            let continent = &map.continents[c_idx];
-            let mut state = map.states[c_idx];
-            let messages = actor_messages_for(c_idx, &map, &mut rng);
-            apply_actor_messages(society, &messages);
+        // Pre-compute per-continent actor messages deterministically.
+        let continent_messages: Vec<Vec<ActorMessage>> = (0..map.continents.len())
+            .map(|ci| {
+                let mut msg_rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(ci as u64)
+                    .wrapping_add(generation as u64)
+                    .max(1);
+                actor_messages_for(ci, &map, &mut msg_rng)
+            })
+            .collect();
+        // Advance global rng to stay deterministic.
+        rand01(&mut rng);
 
-            let nk_fit = landscape.fitness(society.genome.bits);
-            let energy_access =
-                (continent.energy_endowment * state.stock * (1.0 - state.depletion)
-                    + 0.35 * continent.domesticable_biomass
-                    + 0.22 * continent.diffusion_access)
+        // --- Pass 1 (parallel): compute society updates and resource extraction ---
+        struct SocietyUpdate {
+            extraction: f64,
+            continent: usize,
+            collapsed: bool,
+        }
+
+        let updates: Vec<SocietyUpdate> = societies
+            .par_iter_mut()
+            .map(|society| {
+                let c_idx = society.continent;
+                let continent = &map.continents[c_idx];
+                let state = state_snapshot[c_idx];
+
+                // Per-society deterministic RNG seeded from id + generation.
+                let mut srng = society
+                    .id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(config.seed)
+                    .max(1);
+
+                apply_actor_messages(society, &continent_messages[c_idx]);
+
+                let nk_fit = landscape.fitness(society.genome.bits);
+                let energy_access =
+                    (continent.energy_endowment * state.stock * (1.0 - state.depletion)
+                        + 0.35 * continent.domesticable_biomass
+                        + 0.22 * continent.diffusion_access)
+                        .clamp(0.0, 2.0);
+
+                let layer = dunbar_behavior(society.population, config.dunbar_model);
+
+                let innovation =
+                    (0.48 * nk_fit + 0.27 * continent.diffusion_access + layer.coordination_gain)
+                        .clamp(0.0, 1.4);
+                let complexity_gain =
+                    (0.20 * energy_access + 0.24 * innovation + 0.08 * society.trust)
+                        .clamp(0.0, 1.0);
+                let maintenance = (0.06
+                    + 0.16 * society.complexity
+                    + 0.10 * society.complexity.powi(2)
+                    + layer.communication_cost
+                    + 0.5 * layer.expectation_load
+                    + 0.08 * state.depletion)
                     .clamp(0.0, 2.0);
 
-            let layer = dunbar_behavior(society.population, config.dunbar_model);
+                society.surplus =
+                    (society.surplus + complexity_gain - maintenance).clamp(-1.0, 2.5);
+                society.complexity = (society.complexity + 0.14 * complexity_gain
+                    - 0.10 * maintenance)
+                    .clamp(0.0, 1.8);
 
-            let innovation =
-                (0.48 * nk_fit + 0.27 * continent.diffusion_access + layer.coordination_gain)
-                    .clamp(0.0, 1.4);
-            let complexity_gain =
-                (0.20 * energy_access + 0.24 * innovation + 0.08 * society.trust).clamp(0.0, 1.0);
-            let maintenance = (0.06
-                + 0.16 * society.complexity
-                + 0.10 * society.complexity.powi(2)
-                + layer.communication_cost
-                + 0.5 * layer.expectation_load
-                + 0.08 * state.depletion)
-                .clamp(0.0, 2.0);
+                let stress_shock = if rand01(&mut srng) < continent.shock_risk {
+                    rand01(&mut srng) * 0.35
+                } else {
+                    0.0
+                };
+                society.resilience =
+                    (society.resilience + 0.04 * innovation - 0.05 * stress_shock).clamp(0.05, 1.3);
+                society.trust = (society.trust + 0.03 * innovation
+                    - 0.04 * stress_shock
+                    - layer.trust_decay
+                    - 0.02 * layer.expectation_load)
+                    .clamp(0.0, 1.0);
 
-            society.surplus = (society.surplus + complexity_gain - maintenance).clamp(-1.0, 2.5);
-            society.complexity =
-                (society.complexity + 0.14 * complexity_gain - 0.10 * maintenance).clamp(0.0, 1.8);
+                let growth = (0.012 * society.surplus + 0.010 * society.resilience
+                    - 0.008 * stress_shock)
+                    .clamp(-0.08, 0.12);
+                let next_population = ((society.population as f64) * (1.0 + growth)).round() as i64;
+                society.population = next_population.max(4) as u32;
 
-            let stress_shock = if rand01(&mut rng) < continent.shock_risk {
-                rand01(&mut rng) * 0.35
-            } else {
-                0.0
-            };
-            society.resilience =
-                (society.resilience + 0.04 * innovation - 0.05 * stress_shock).clamp(0.05, 1.3);
-            society.trust = (society.trust + 0.03 * innovation
-                - 0.04 * stress_shock
-                - layer.trust_decay
-                - 0.02 * layer.expectation_load)
-                .clamp(0.0, 1.0);
+                let local_count = continent_counts[c_idx].max(1) as f64;
+                let extraction = ((society.population as f64) / 140_000.0)
+                    * (1.0 + 0.8 * society.complexity)
+                    + 0.012 * society.surplus.max(0.0);
 
-            let growth = (0.012 * society.surplus + 0.010 * society.resilience
-                - 0.008 * stress_shock)
-                .clamp(-0.08, 0.12);
-            let next_population = ((society.population as f64) * (1.0 + growth)).round() as i64;
-            society.population = next_population.max(4) as u32;
+                let collapse_trigger = (state.stock < 0.12 * continent.carrying_capacity
+                    || state.depletion > 0.88)
+                    && society.complexity > 0.55;
+                if collapse_trigger {
+                    society.population =
+                        ((society.population as f64) * 0.68).round().max(4.0) as u32;
+                    society.complexity = (society.complexity * 0.72).clamp(0.0, 1.8);
+                    society.surplus = (society.surplus - 0.22).clamp(-1.0, 2.5);
+                    society.mode = SubsistenceMode::HunterGatherer;
+                } else {
+                    society.mode = mode_from_population(society.population, society.surplus);
+                }
 
-            let local_count = continent_counts[c_idx].max(1) as f64;
-            let extraction = ((society.population as f64) / 140_000.0)
-                * (1.0 + 0.8 * society.complexity)
-                + 0.012 * society.surplus.max(0.0);
+                society.genome = mutate_genome(society.genome, config.nk_n, &mut srng);
+
+                SocietyUpdate {
+                    extraction: extraction / local_count,
+                    continent: c_idx,
+                    collapsed: collapse_trigger,
+                }
+            })
+            .collect();
+
+        // --- Pass 2: aggregate resource changes per continent ---
+        let collapse_events = updates.iter().filter(|u| u.collapsed).count() as u32;
+        let mut extraction_per_continent = vec![0.0_f64; map.continents.len()];
+        for update in &updates {
+            extraction_per_continent[update.continent] += update.extraction;
+        }
+        for (ci, continent) in map.continents.iter().enumerate() {
+            let state = &mut map.states[ci];
             let regen =
                 continent.regen_rate * continent.carrying_capacity * (1.0 - 0.35 * state.depletion);
-            state.stock =
-                (state.stock + regen - extraction).clamp(0.0, continent.carrying_capacity * 1.1);
-            let depletion_load = extraction / local_count;
-            state.depletion = (state.depletion + 0.08 * depletion_load
+            let total_extraction = extraction_per_continent[ci];
+            state.stock = (state.stock + regen - total_extraction)
+                .clamp(0.0, continent.carrying_capacity * 1.1);
+            state.depletion = (state.depletion + 0.08 * total_extraction
                 - 0.45 * continent.regen_rate)
                 .clamp(0.0, 1.0);
-
-            let collapse_trigger = (state.stock < 0.12 * continent.carrying_capacity
-                || state.depletion > 0.88)
-                && society.complexity > 0.55;
-            if collapse_trigger {
-                collapse_events = collapse_events.saturating_add(1);
-                society.population = ((society.population as f64) * 0.68).round().max(4.0) as u32;
-                society.complexity = (society.complexity * 0.72).clamp(0.0, 1.8);
-                society.surplus = (society.surplus - 0.22).clamp(-1.0, 2.5);
-                society.mode = SubsistenceMode::HunterGatherer;
-            } else {
-                society.mode = mode_from_population(society.population, society.surplus);
-            }
-
-            society.genome = mutate_genome(society.genome, config.nk_n, &mut rng);
-            map.states[c_idx] = state;
         }
 
         // Sexual selection: reproduction probability scales with mate fitness.
-        // High-surplus, high-complexity, high-trust societies are more attractive
-        // and reproduce more often — creating directional selection pressure
-        // beyond pure survival.
-        let mut offspring = Vec::new();
-        let mut id_counter = societies.len() as u64 + (generation as u64) * 10;
-        for society in &societies {
-            if society.population < 30 {
-                continue;
-            }
-            let nk_fit = landscape.fitness(society.genome.bits);
-            let mate_score = mate_fitness(society, nk_fit);
-            // Base rate 0.04, scales up to ~0.16 for highest-fitness societies.
-            let reproduction_prob = 0.04 * (1.0 + 3.0 * mate_score);
-            if rand01(&mut rng) < reproduction_prob {
-                let target = migrate_target(society.continent, &map.corridors, &mut rng)
+        // Uses per-society RNG for deterministic parallel reproduction decisions.
+        let offspring: Vec<SocietyActor> = societies
+            .par_iter()
+            .filter_map(|society| {
+                if society.population < 30 {
+                    return None;
+                }
+                let mut srng = society
+                    .id
+                    .wrapping_mul(2862933555777941757)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(config.seed)
+                    .wrapping_add(0xBEEF)
+                    .max(1);
+                let nk_fit = landscape.fitness(society.genome.bits);
+                let mate_score = mate_fitness(society, nk_fit);
+                let reproduction_prob = 0.04 * (1.0 + 3.0 * mate_score);
+                if rand01(&mut srng) >= reproduction_prob {
+                    return None;
+                }
+                let target = migrate_target(society.continent, &map.corridors, &mut srng)
                     .unwrap_or(society.continent);
+                let child_id = society
+                    .id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(1);
                 let mut child = *society;
-                child.id = id_counter;
-                id_counter = id_counter.saturating_add(1);
+                child.id = child_id;
                 child.continent = target;
                 child.population = ((society.population as f64) * 0.16).round().max(5.0) as u32;
                 child.complexity = (society.complexity * 0.80).clamp(0.0, 1.8);
                 child.surplus = (society.surplus * 0.70).clamp(-1.0, 2.5);
-                child.genome = mutate_genome(society.genome, config.nk_n, &mut rng);
-                offspring.push(child);
-            }
-        }
+                child.genome = mutate_genome(society.genome, config.nk_n, &mut srng);
+                Some(child)
+            })
+            .collect();
         societies.extend(offspring);
 
         societies.retain(|s| s.population > 3);
@@ -939,29 +1002,46 @@ pub struct ConvergenceResult {
 /// superorganism emergence is an attractor under varied initial conditions.
 #[must_use]
 pub fn run_convergence_experiment(cfg: &ConvergenceExperimentConfig) -> ConvergenceResult {
-    let mut outcomes = Vec::new();
+    // Build work items: (condition_index, seed, EvolutionConfig).
+    let work_items: Vec<(usize, u64, EvolutionConfig)> = cfg
+        .conditions
+        .iter()
+        .enumerate()
+        .flat_map(|(ci, cond)| {
+            (0..cfg.seeds_per_condition).map(move |seed_idx| {
+                let seed = (seed_idx as u64)
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(ci as u64)
+                    .wrapping_add(1)
+                    .max(1);
+                (
+                    ci,
+                    seed,
+                    EvolutionConfig {
+                        seed,
+                        generations: cfg.generations,
+                        initial_societies: cond.initial_societies,
+                        nk_n: cfg.nk_n,
+                        nk_k: cfg.nk_k,
+                        layout: cond.layout,
+                        isolation_factor: cond.isolation_factor,
+                        dunbar_model: cfg.dunbar_model,
+                        population_range: cond.population_range,
+                        initial_complexity_range: cond.initial_complexity_range,
+                        resource_multiplier: cond.resource_multiplier,
+                    },
+                )
+            })
+        })
+        .collect();
 
-    for (ci, cond) in cfg.conditions.iter().enumerate() {
-        for seed_idx in 0..cfg.seeds_per_condition {
-            let seed = (seed_idx as u64)
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(ci as u64)
-                .wrapping_add(1)
-                .max(1);
-
-            let result = simulate_evolution(EvolutionConfig {
-                seed,
-                generations: cfg.generations,
-                initial_societies: cond.initial_societies,
-                nk_n: cfg.nk_n,
-                nk_k: cfg.nk_k,
-                layout: cond.layout,
-                isolation_factor: cond.isolation_factor,
-                dunbar_model: cfg.dunbar_model,
-                population_range: cond.population_range,
-                initial_complexity_range: cond.initial_complexity_range,
-                resource_multiplier: cond.resource_multiplier,
-            });
+    // Run all simulations in parallel across available cores.
+    let threshold = cfg.superorganism_threshold;
+    let sustained_gens = cfg.sustained_generations;
+    let outcomes: Vec<RunOutcome> = work_items
+        .par_iter()
+        .map(|(ci, seed, evo_cfg)| {
+            let result = simulate_evolution(*evo_cfg);
 
             let peak_so = result
                 .snapshots
@@ -974,26 +1054,22 @@ pub fn run_convergence_experiment(cfg: &ConvergenceExperimentConfig) -> Converge
             let final_cx = final_snap.map_or(0.0, |s| s.mean_complexity);
             let total_collapses: u32 = result.snapshots.iter().map(|s| s.collapse_events).sum();
 
-            // Check sustained crossing: N consecutive generations above threshold.
             let mut consecutive = 0_u32;
             let mut first_sustained: Option<u32> = None;
             for snap in &result.snapshots {
-                if snap.superorganism_index >= cfg.superorganism_threshold {
+                if snap.superorganism_index >= threshold {
                     consecutive = consecutive.saturating_add(1);
-                    if consecutive >= cfg.sustained_generations && first_sustained.is_none() {
-                        first_sustained = Some(
-                            snap.generation
-                                .saturating_sub(cfg.sustained_generations - 1),
-                        );
+                    if consecutive >= sustained_gens && first_sustained.is_none() {
+                        first_sustained = Some(snap.generation.saturating_sub(sustained_gens - 1));
                     }
                 } else {
                     consecutive = 0;
                 }
             }
 
-            outcomes.push(RunOutcome {
-                condition_index: ci,
-                seed,
+            RunOutcome {
+                condition_index: *ci,
+                seed: *seed,
                 reached_superorganism: first_sustained.is_some(),
                 time_to_superorganism: first_sustained,
                 peak_superorganism_index: peak_so,
@@ -1001,9 +1077,9 @@ pub fn run_convergence_experiment(cfg: &ConvergenceExperimentConfig) -> Converge
                 final_population: final_pop,
                 total_collapses,
                 final_mean_complexity: final_cx,
-            });
-        }
-    }
+            }
+        })
+        .collect();
 
     let mut condition_summaries = Vec::with_capacity(cfg.conditions.len());
     for (ci, cond) in cfg.conditions.iter().enumerate() {
@@ -1217,10 +1293,15 @@ mod tests {
     fn evolution_run_shows_both_emergence_and_collapse_events() {
         let result = simulate_evolution(EvolutionConfig {
             seed: 99,
-            generations: 220,
-            initial_societies: 18,
+            generations: 300,
+            initial_societies: 20,
             nk_n: 12,
             nk_k: 3,
+            layout: ContinentalLayout::Connected,
+            isolation_factor: 0.1,
+            resource_multiplier: 0.6,
+            population_range: (8, 60),
+            initial_complexity_range: (0.05, 0.15),
             ..EvolutionConfig::default()
         });
 
