@@ -4,14 +4,12 @@ use walrus_engine::evolution::{
 
 fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
     let result = simulate_evolution(EvolutionConfig {
-        seed: 2026,
-        generations: 260,
-        initial_societies: 20,
-        nk_n: 14,
-        nk_k: 3,
         layout,
         isolation_factor,
+        generations: 260,
+        initial_societies: 20,
         dunbar_model: DunbarBehaviorModel::default(),
+        ..EvolutionConfig::default()
     });
 
     let collapse_total = result
@@ -39,10 +37,13 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
                 emergent_civilizations: 0,
                 convergence_index: 0.0,
                 adaptation_divergence: 0.0,
+                superorganism_index: 0.0,
+                natural_disaster_events: 0,
+                pandemic_events: 0,
             });
 
     println!(
-        "{:?},{:.2},{},{},{:.3},{:.3},{:.3}",
+        "{:?},{:.2},{},{},{:.3},{:.3},{:.3},{:.3}",
         layout,
         isolation_factor,
         collapse_total,
@@ -50,12 +51,13 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
         final_snap.mean_complexity,
         final_snap.convergence_index,
         final_snap.adaptation_divergence,
+        final_snap.superorganism_index,
     );
 }
 
 fn main() {
     println!(
-        "layout,isolation_factor,total_collapses,peak_emergent_polities,final_complexity,final_convergence,final_divergence"
+        "layout,isolation_factor,total_collapses,peak_emergent_polities,final_complexity,final_convergence,final_divergence,final_superorganism"
     );
 
     summarize(ContinentalLayout::Connected, 0.05);

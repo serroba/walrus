@@ -39,13 +39,18 @@ The objective is to test classes of behavior:
 
 5. **Actor-model interaction loop:**
 - societies are explicit actors receiving messages each generation.
-- message classes: climate shock, resource pulse, migration link.
+- message classes: climate shock, resource pulse, migration link, natural disaster, pandemic wave.
 - actor state update is local and then aggregated globally.
 
 6. **Energy/material accounting + ecological feedback:**
 - extraction increases surplus but depletes local stocks.
 - low stock/high depletion triggers collapse pressure.
 - regeneration prevents trivial one-way decline and enables reorganization cycles.
+
+7. **Exogenous shocks (disasters and pandemics):**
+- natural disasters and pandemics are modeled as recurrent, stochastic shocks,
+- shock risk interacts with geography, connectivity, and local stress,
+- shocks can trigger non-linear collapse/regression pathways.
 
 ## What We Assume Explicitly
 

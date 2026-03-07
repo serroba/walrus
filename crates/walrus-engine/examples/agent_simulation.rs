@@ -1,0 +1,212 @@
+use std::env;
+
+use walrus_engine::agents::{
+    simulate_agents, AgentSimConfig, InteractionParams, LifecycleParams, MateSelectionParams,
+    MovementParams,
+};
+
+fn env_f32(key: &str, default: f32) -> f32 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_f64(key: &str, default: f64) -> f64 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u16(key: &str, default: u16) -> u16 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u32(key: &str, default: u32) -> u32 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn env_u64(key: &str, default: u64) -> u64 {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+fn build_config() -> AgentSimConfig {
+    let d = AgentSimConfig::default();
+    let di = d.interaction;
+    let dl = d.lifecycle;
+    let dm = d.movement;
+    let dms = d.mate_selection;
+
+    AgentSimConfig {
+        seed: env_u64("SEED", d.seed),
+        initial_population: env_u32("INITIAL_POP", d.initial_population),
+        ticks: env_u32("TICKS", d.ticks),
+        world_size: env_f32("WORLD_SIZE", d.world_size),
+        interaction_radius: env_f32("INTERACTION_RADIUS", d.interaction_radius),
+        resource_regen: env_f32("RESOURCE_REGEN", d.resource_regen),
+        max_age: env_u16("MAX_AGE", d.max_age),
+        min_population: env_u32("MIN_POP", d.min_population),
+        max_population: env_u32("MAX_POP", d.max_population),
+        interaction: InteractionParams {
+            coop_self_weight: env_f32("COOP_SELF_WEIGHT", di.coop_self_weight),
+            coop_other_weight: env_f32("COOP_OTHER_WEIGHT", di.coop_other_weight),
+            coop_kin_bonus: env_f32("COOP_KIN_BONUS", di.coop_kin_bonus),
+            conflict_self_weight: env_f32("CONFLICT_SELF_WEIGHT", di.conflict_self_weight),
+            conflict_other_weight: env_f32("CONFLICT_OTHER_WEIGHT", di.conflict_other_weight),
+            conflict_stranger_bonus: env_f32("CONFLICT_STRANGER_BONUS", di.conflict_stranger_bonus),
+            trade_complementary: env_f32("TRADE_COMPLEMENTARY", di.trade_complementary),
+            trade_same_skill: env_f32("TRADE_SAME_SKILL", di.trade_same_skill),
+            coop_resource_bonus: env_f32("COOP_RESOURCE_BONUS", di.coop_resource_bonus),
+            coop_prestige_gain: env_f32("COOP_PRESTIGE_GAIN", di.coop_prestige_gain),
+            conflict_win_resources: env_f32("CONFLICT_WIN_RESOURCES", di.conflict_win_resources),
+            conflict_win_status: env_f32("CONFLICT_WIN_STATUS", di.conflict_win_status),
+            conflict_lose_resources: env_f32("CONFLICT_LOSE_RESOURCES", di.conflict_lose_resources),
+            conflict_lose_health: env_f32("CONFLICT_LOSE_HEALTH", di.conflict_lose_health),
+            conflict_noise: env_f32("CONFLICT_NOISE", di.conflict_noise),
+            trade_complementary_bonus: env_f32(
+                "TRADE_COMPLEMENTARY_BONUS",
+                di.trade_complementary_bonus,
+            ),
+            trade_same_bonus: env_f32("TRADE_SAME_BONUS", di.trade_same_bonus),
+            max_health_loss_per_tick: env_f32(
+                "MAX_HEALTH_LOSS_PER_TICK",
+                di.max_health_loss_per_tick,
+            ),
+            delegation_status_gap: env_f32("DELEGATION_STATUS_GAP", di.delegation_status_gap),
+            delegation_tax_rate: env_f32("DELEGATION_TAX_RATE", di.delegation_tax_rate),
+            delegation_prestige_gain: env_f32(
+                "DELEGATION_PRESTIGE_GAIN",
+                di.delegation_prestige_gain,
+            ),
+            power_status_weight: env_f32("POWER_STATUS_WEIGHT", di.power_status_weight),
+            power_skill_weight: env_f32("POWER_SKILL_WEIGHT", di.power_skill_weight),
+            power_aggression_weight: env_f32("POWER_AGGRESSION_WEIGHT", di.power_aggression_weight),
+            max_status: env_f32("MAX_STATUS", di.max_status),
+            max_prestige: env_f32("MAX_PRESTIGE", di.max_prestige),
+            subsistence_level: env_f32("SUBSISTENCE_LEVEL", di.subsistence_level),
+            skill_practice_rate: env_f32("SKILL_PRACTICE_RATE", di.skill_practice_rate),
+        },
+        lifecycle: LifecycleParams {
+            health_decay_base: env_f32("HEALTH_DECAY_BASE", dl.health_decay_base),
+            health_decay_age_factor: env_f32("HEALTH_DECAY_AGE_FACTOR", dl.health_decay_age_factor),
+            health_recovery_threshold: env_f32(
+                "HEALTH_RECOVERY_THRESHOLD",
+                dl.health_recovery_threshold,
+            ),
+            health_recovery_rate: env_f32("HEALTH_RECOVERY_RATE", dl.health_recovery_rate),
+            death_health_threshold: env_f32("DEATH_HEALTH_THRESHOLD", dl.death_health_threshold),
+            starvation_resource_threshold: env_f32(
+                "STARVATION_RESOURCE_THRESHOLD",
+                dl.starvation_resource_threshold,
+            ),
+            starvation_death_prob: env_f32("STARVATION_DEATH_PROB", dl.starvation_death_prob),
+            female_peak_fertility: env_f32("FEMALE_PEAK_FERTILITY", dl.female_peak_fertility),
+            female_fertility_peak_age: env_f32(
+                "FEMALE_FERTILITY_PEAK_AGE",
+                dl.female_fertility_peak_age,
+            ),
+            female_fertility_decline: env_f32(
+                "FEMALE_FERTILITY_DECLINE",
+                dl.female_fertility_decline,
+            ),
+            male_peak_fertility: env_f32("MALE_PEAK_FERTILITY", dl.male_peak_fertility),
+            male_fertility_peak_age: env_f32("MALE_FERTILITY_PEAK_AGE", dl.male_fertility_peak_age),
+            male_fertility_decline: env_f32("MALE_FERTILITY_DECLINE", dl.male_fertility_decline),
+            min_fertility: env_f32("MIN_FERTILITY", dl.min_fertility),
+            min_reproduction_age: env_u16("MIN_REPRO_AGE", dl.min_reproduction_age),
+            max_reproduction_age: env_u16("MAX_REPRO_AGE", dl.max_reproduction_age),
+            reproduction_resource_threshold: env_f32(
+                "REPRO_RESOURCE_THRESHOLD",
+                dl.reproduction_resource_threshold,
+            ),
+            birth_rate: env_f32("BIRTH_RATE", dl.birth_rate),
+            birth_resource_cost: env_f32("BIRTH_RESOURCE_COST", dl.birth_resource_cost),
+            birth_health_cost: env_f32("BIRTH_HEALTH_COST", dl.birth_health_cost),
+            skill_maternal_inherit_prob: env_f64(
+                "SKILL_MATERNAL_INHERIT_PROB",
+                dl.skill_maternal_inherit_prob,
+            ),
+            skill_mutation_prob: env_f64("SKILL_MUTATION_PROB", dl.skill_mutation_prob),
+            trait_mutation_magnitude: env_f32(
+                "TRAIT_MUTATION_MAGNITUDE",
+                dl.trait_mutation_magnitude,
+            ),
+            norm_mutation_prob: env_f64("NORM_MUTATION_PROB", dl.norm_mutation_prob),
+            newborn_health: env_f32("NEWBORN_HEALTH", dl.newborn_health),
+            newborn_skill_level: env_f32("NEWBORN_SKILL_LEVEL", dl.newborn_skill_level),
+            newborn_status: env_f32("NEWBORN_STATUS", dl.newborn_status),
+            newborn_resources: env_f32("NEWBORN_RESOURCES", dl.newborn_resources),
+            birth_spawn_radius: env_f32("BIRTH_SPAWN_RADIUS", dl.birth_spawn_radius),
+            agents_per_kin_group: env_u32("AGENTS_PER_KIN_GROUP", dl.agents_per_kin_group),
+        },
+        movement: MovementParams {
+            kin_pull_strength: env_f32("KIN_PULL_STRENGTH", dm.kin_pull_strength),
+            drift_with_kin: env_f32("DRIFT_WITH_KIN", dm.drift_with_kin),
+            drift_alone: env_f32("DRIFT_ALONE", dm.drift_alone),
+        },
+        mate_selection: MateSelectionParams {
+            status_weight: env_f32("MATE_STATUS_WEIGHT", dms.status_weight),
+            resource_weight: env_f32("MATE_RESOURCE_WEIGHT", dms.resource_weight),
+            prestige_weight: env_f32("MATE_PRESTIGE_WEIGHT", dms.prestige_weight),
+            noise_weight: env_f32("MATE_NOISE_WEIGHT", dms.noise_weight),
+        },
+    }
+}
+
+fn main() {
+    let cfg = build_config();
+
+    eprintln!("Agent Simulation");
+    eprintln!(
+        "  pop={} ticks={} world={} radius={} regen={} max_age={}",
+        cfg.initial_population,
+        cfg.ticks,
+        cfg.world_size,
+        cfg.interaction_radius,
+        cfg.resource_regen,
+        cfg.max_age
+    );
+    eprintln!(
+        "  birth_rate={} conflict_lose_health={} health_recovery_rate={}",
+        cfg.lifecycle.birth_rate,
+        cfg.interaction.conflict_lose_health,
+        cfg.lifecycle.health_recovery_rate
+    );
+
+    let result = simulate_agents(cfg);
+
+    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health");
+    for snap in &result.snapshots {
+        let e = &snap.emergent;
+        println!(
+            "{},{},{},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4}",
+            snap.tick,
+            e.population_size,
+            e.mean_resources,
+            e.gini_coefficient,
+            e.skill_entropy,
+            e.max_hierarchy_depth,
+            e.num_leaders,
+            e.mean_group_size,
+            e.num_kin_groups,
+            e.cooperation_rate,
+            e.conflict_rate,
+            e.mean_prestige,
+            e.mean_health,
+        );
+    }
+
+    let ticks_run = result.snapshots.len();
+    let final_pop = result.final_population.len();
+    eprintln!("{ticks_run} ticks completed, final pop = {final_pop}");
+}

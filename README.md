@@ -15,9 +15,11 @@ Current modeling objective: capture how behavior shifts with group size and hist
   - micro->macro projection and superorganism metrics.
 - `crates/walrus-engine/src/evolution.rs`:
   - society actor model across abstract continents,
-  - NK mutation/selection over generations,
+  - NK mutation/selection + sexual selection (mate-fitness-proportional reproduction),
   - Dunbar behavioral constraints (trust, communication, expectation),
-  - configurable isolation/diffusion topology.
+  - configurable isolation/diffusion topology,
+  - superorganism index tracking via core emergence machinery,
+  - convergence experiment framework (multi-seed x multi-condition hypothesis testing).
 - `crates/walrus-engine/src/calibration.rs`:
   - OWID/Maddison/HANDY-compatible ingestion,
   - stylized-fact calibration objective.
@@ -88,6 +90,25 @@ make tui-life
 This launches a live terminal simulation where each character is an agent and
 emergence is shown frame-by-frame.
 
+## Run Convergence Experiment
+
+```bash
+make convergence-experiment
+```
+
+Tests the core hypothesis: **is superorganism emergence inevitable given enough time and resources?**
+
+Runs 192 simulations (8 starting conditions x 24 seeds) spanning:
+
+- abundant vs. scarce resources,
+- connected vs. isolated geography,
+- many small groups vs. few large groups,
+- varied initial complexity levels.
+
+For each run, tracks whether superorganism index crosses a sustained threshold,
+time-to-emergence, peak signals, and collapse frequency. Outputs per-condition
+arrival rates and distributional statistics.
+
 ## Run Evolutionary Actor Map
 
 ```bash
@@ -135,6 +156,10 @@ that roll up into macro emergence metrics.
 
 It also includes a society-level actor model with per-generation messages,
 geography constraints, and evolutionary adaptation.
+
+Coordination-failure and AI-risk framing is documented in:
+
+- `docs/foundations/12_moloch-ai-coordination-framework.md`
 
 Usage guidance is documented in:
 

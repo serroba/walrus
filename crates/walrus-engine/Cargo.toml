@@ -9,5 +9,8 @@ authors.workspace = true
 name = "walrus_engine"
 path = "src/lib.rs"
 
+[dependencies]
+rayon = "1"
+
 [lints]
 workspace = true
