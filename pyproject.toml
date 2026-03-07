@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "walrus-sim"
+version = "0.1.0"
+description = "Agent-based simulation framework for superorganism dynamics"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Walrus Contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "mypy>=1.11.0",
+  "pytest>=8.3.0",
+  "pytest-cov>=5.0.0",
+  "ruff>=0.6.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-q --strict-markers --disable-warnings --cov=walrus_sim --cov-report=term-missing --cov-report=xml --cov-fail-under=90"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "C4", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+mypy_path = "src"
+
+[tool.coverage.run]
+branch = true
+source = ["walrus_sim"]
