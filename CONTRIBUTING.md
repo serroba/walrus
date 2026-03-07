@@ -2,17 +2,15 @@
 
 ## Development Setup
 
-```bash
-uv sync --all-extras
-```
+Install stable Rust (toolchain with `rustfmt` and `clippy`).
 
 ## Quality Contract
 
 All PRs must pass:
 
-1. `uv run make lint`
-2. `uv run make typecheck`
-3. `uv run make test` (coverage threshold is enforced)
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --workspace --all-targets -- -D warnings`
+3. `cargo test --workspace --all-targets`
 
 ## Commit Frequency
 

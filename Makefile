@@ -1,18 +1,15 @@
-.PHONY: lint format typecheck test coverage check
+.PHONY: fmt lint test check
+
+fmt:
+	cargo fmt --all
 
 lint:
-	uv run ruff check src tests
-
-format:
-	uv run ruff format src tests
-
-typecheck:
-	uv run mypy src tests
+	cargo clippy --workspace --all-targets -- -D warnings
 
 test:
-	uv run pytest
+	cargo test --workspace --all-targets
 
-coverage:
-	uv run pytest --cov-report=xml --cov-report=term-missing
-
-check: lint typecheck test
+check:
+	cargo fmt --all -- --check
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo test --workspace --all-targets

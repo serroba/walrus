@@ -2,16 +2,21 @@
 
 Open-source simulation framework to test explicit assumptions about energy, materials, institutions, and emergent superorganism dynamics.
 
+## Tech Direction
+
+- Engine core: Rust (performance, safety, scalability)
+- Analysis/orchestration: optional Python layer later (via `uv`)
+
 ## Quality Gates
 
-- Lint: `ruff`
-- Types: `mypy --strict`
-- Tests: `pytest`
-- Coverage threshold: 90%
+- Format: `cargo fmt --all -- --check`
+- Lint: `cargo clippy --workspace --all-targets -- -D warnings`
+- Tests: `cargo test --workspace --all-targets`
 
 ## Quick Start
 
 ```bash
-uv sync --all-extras
-make check
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
 ```
