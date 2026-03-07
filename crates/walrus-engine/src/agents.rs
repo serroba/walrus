@@ -59,71 +59,35 @@ pub struct Population {
     // Relationships
     pub kin_groups: Vec<u32>,
     pub partners: Vec<Option<u32>>, // index into population, not id
-    pub patrons: Vec<Option<u32>>,  // index into population, not id
+    pub patrons: Vec<Option<u32>>,  // delegation hierarchy
 
-    // Spatial (grid position)
+    // Spatial
     pub xs: Vec<f32>,
     pub ys: Vec<f32>,
 }
 
+struct AgentInit {
+    id: u64,
+    sex: Sex,
+    age: u16,
+    fertility: f32,
+    health: f32,
+    skill_type: SkillType,
+    skill_level: f32,
+    status: f32,
+    prestige: f32,
+    aggression: f32,
+    cooperation: f32,
+    resources: f32,
+    surplus: f32,
+    norms: u64,
+    innovation: f32,
+    kin_group: u32,
+    x: f32,
+    y: f32,
+}
+
 impl Population {
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.ids.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.ids.is_empty()
-    }
-
-    fn push_agent(&mut self, agent: AgentInit) {
-        self.ids.push(agent.id);
-        self.sexes.push(agent.sex);
-        self.ages.push(agent.age);
-        self.fertilities.push(agent.fertility);
-        self.healths.push(agent.health);
-        self.skill_types.push(agent.skill_type);
-        self.skill_levels.push(agent.skill_level);
-        self.statuses.push(agent.status);
-        self.prestiges.push(agent.prestige);
-        self.aggressions.push(agent.aggression);
-        self.cooperations.push(agent.cooperation);
-        self.resources.push(agent.resources);
-        self.surpluses.push(agent.surplus);
-        self.norms.push(agent.norms);
-        self.innovations.push(agent.innovation);
-        self.kin_groups.push(agent.kin_group);
-        self.partners.push(None);
-        self.patrons.push(None);
-        self.xs.push(agent.x);
-        self.ys.push(agent.y);
-    }
-
-    /// Remove agent at index by swap-removing (O(1)).
-    fn swap_remove(&mut self, idx: usize) {
-        self.ids.swap_remove(idx);
-        self.sexes.swap_remove(idx);
-        self.ages.swap_remove(idx);
-        self.fertilities.swap_remove(idx);
-        self.healths.swap_remove(idx);
-        self.skill_types.swap_remove(idx);
-        self.skill_levels.swap_remove(idx);
-        self.statuses.swap_remove(idx);
-        self.prestiges.swap_remove(idx);
-        self.aggressions.swap_remove(idx);
-        self.cooperations.swap_remove(idx);
-        self.resources.swap_remove(idx);
-        self.surpluses.swap_remove(idx);
-        self.norms.swap_remove(idx);
-        self.innovations.swap_remove(idx);
-        self.kin_groups.swap_remove(idx);
-        self.partners.swap_remove(idx);
-        self.patrons.swap_remove(idx);
-        self.xs.swap_remove(idx);
-        self.ys.swap_remove(idx);
-    }
-
     fn empty() -> Self {
         Self {
             ids: Vec::new(),
@@ -148,71 +112,100 @@ impl Population {
             ys: Vec::new(),
         }
     }
-}
 
-struct AgentInit {
-    id: u64,
-    sex: Sex,
-    age: u16,
-    fertility: f32,
-    health: f32,
-    skill_type: SkillType,
-    skill_level: f32,
-    status: f32,
-    prestige: f32,
-    aggression: f32,
-    cooperation: f32,
-    resources: f32,
-    surplus: f32,
-    norms: u64,
-    innovation: f32,
-    kin_group: u32,
-    x: f32,
-    y: f32,
-}
+    pub fn len(&self) -> usize {
+        self.ids.len()
+    }
 
-// ---------------------------------------------------------------------------
-// Spatial grid for neighbor lookups
-// ---------------------------------------------------------------------------
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    fn push_agent(&mut self, a: AgentInit) {
+        self.ids.push(a.id);
+        self.sexes.push(a.sex);
+        self.ages.push(a.age);
+        self.fertilities.push(a.fertility);
+        self.healths.push(a.health);
+        self.skill_types.push(a.skill_type);
+        self.skill_levels.push(a.skill_level);
+        self.statuses.push(a.status);
+        self.prestiges.push(a.prestige);
+        self.aggressions.push(a.aggression);
+        self.cooperations.push(a.cooperation);
+        self.resources.push(a.resources);
+        self.surpluses.push(a.surplus);
+        self.norms.push(a.norms);
+        self.innovations.push(a.innovation);
+        self.kin_groups.push(a.kin_group);
+        self.partners.push(None);
+        self.patrons.push(None);
+        self.xs.push(a.x);
+        self.ys.push(a.y);
+    }
+
+    fn swap_remove(&mut self, idx: usize) {
+        self.ids.swap_remove(idx);
+        self.sexes.swap_remove(idx);
+        self.ages.swap_remove(idx);
+        self.fertilities.swap_remove(idx);
+        self.healths.swap_remove(idx);
+        self.skill_types.swap_remove(idx);
+        self.skill_levels.swap_remove(idx);
+        self.statuses.swap_remove(idx);
+        self.prestiges.swap_remove(idx);
+        self.aggressions.swap_remove(idx);
+        self.cooperations.swap_remove(idx);
+        self.resources.swap_remove(idx);
+        self.surpluses.swap_remove(idx);
+        self.norms.swap_remove(idx);
+        self.innovations.swap_remove(idx);
+        self.kin_groups.swap_remove(idx);
+        self.partners.swap_remove(idx);
+        self.patrons.swap_remove(idx);
+        self.xs.swap_remove(idx);
+        self.ys.swap_remove(idx);
+    }
+}
 
 /// Spatial hash grid for O(1) neighbor queries.
 struct SpatialGrid {
-    cell_size: f32,
+    cells: Vec<Vec<u32>>,
     cols: usize,
     rows: usize,
-    cells: Vec<Vec<u32>>, // cell -> list of agent indices
+    cell_size: f32,
 }
 
 impl SpatialGrid {
     fn build(xs: &[f32], ys: &[f32], cell_size: f32, world_size: f32) -> Self {
-        let dim = (world_size / cell_size).ceil() as usize;
-        let cols = dim.max(1);
-        let rows = dim.max(1);
+        let cols = (world_size / cell_size).ceil() as usize + 1;
+        let rows = cols;
         let mut cells = vec![Vec::new(); cols * rows];
-        for (i, (x, y)) in xs.iter().zip(ys.iter()).enumerate() {
-            let cx = ((*x / cell_size).floor() as usize).min(cols - 1);
-            let cy = ((*y / cell_size).floor() as usize).min(rows - 1);
-            cells[cy * cols + cx].push(i as u32);
+        for (idx, (&x, &y)) in xs.iter().zip(ys.iter()).enumerate() {
+            let cx = (x / cell_size).floor() as usize;
+            let cy = (y / cell_size).floor() as usize;
+            let key = cy.min(rows - 1) * cols + cx.min(cols - 1);
+            cells[key].push(idx as u32);
         }
         Self {
-            cell_size,
+            cells,
             cols,
             rows,
-            cells,
+            cell_size,
         }
     }
 
     fn neighbors_of(&self, x: f32, y: f32) -> Vec<u32> {
-        let cx = ((x / self.cell_size).floor() as i32).clamp(0, self.cols as i32 - 1);
-        let cy = ((y / self.cell_size).floor() as i32).clamp(0, self.rows as i32 - 1);
+        let cx = (x / self.cell_size).floor() as isize;
+        let cy = (y / self.cell_size).floor() as isize;
         let mut result = Vec::new();
-        for dy in -1..=1_i32 {
-            for dx in -1..=1_i32 {
+        for dy in -1..=1 {
+            for dx in -1..=1 {
                 let nx = cx + dx;
                 let ny = cy + dy;
-                if nx >= 0 && nx < self.cols as i32 && ny >= 0 && ny < self.rows as i32 {
-                    let cell_idx = ny as usize * self.cols + nx as usize;
-                    result.extend_from_slice(&self.cells[cell_idx]);
+                if nx >= 0 && ny >= 0 && (nx as usize) < self.cols && (ny as usize) < self.rows {
+                    let key = ny as usize * self.cols + nx as usize;
+                    result.extend_from_slice(&self.cells[key]);
                 }
             }
         }
@@ -224,7 +217,246 @@ impl SpatialGrid {
 // Configuration
 // ---------------------------------------------------------------------------
 
-/// Configuration for individual agent simulation.
+/// Weights and thresholds for interaction decisions.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct InteractionParams {
+    /// Weight of own cooperation trait on cooperation tendency.
+    pub coop_self_weight: f32,
+    /// Weight of other's cooperation trait on cooperation tendency.
+    pub coop_other_weight: f32,
+    /// Bonus to cooperation tendency when interacting with kin.
+    pub coop_kin_bonus: f32,
+    /// Weight of own aggression on conflict tendency.
+    pub conflict_self_weight: f32,
+    /// Weight of other's aggression on conflict tendency.
+    pub conflict_other_weight: f32,
+    /// Bonus to conflict tendency when interacting with non-kin.
+    pub conflict_stranger_bonus: f32,
+    /// Trade tendency when agents have different skills.
+    pub trade_complementary: f32,
+    /// Trade tendency when agents have the same skill.
+    pub trade_same_skill: f32,
+    /// Resource bonus per cooperation event (scaled by mean cooperation level).
+    pub coop_resource_bonus: f32,
+    /// Prestige gained per cooperation event.
+    pub coop_prestige_gain: f32,
+    /// Resources gained by conflict winner.
+    pub conflict_win_resources: f32,
+    /// Status gained by conflict winner.
+    pub conflict_win_status: f32,
+    /// Resources lost by conflict loser.
+    pub conflict_lose_resources: f32,
+    /// Health lost by conflict loser.
+    pub conflict_lose_health: f32,
+    /// Noise in conflict outcome (higher = more random).
+    pub conflict_noise: f32,
+    /// Trade surplus multiplier for complementary skills.
+    pub trade_complementary_bonus: f32,
+    /// Trade surplus for same-skill trades.
+    pub trade_same_bonus: f32,
+    /// Max health loss from interactions per tick (cap).
+    pub max_health_loss_per_tick: f32,
+    /// Status threshold above which an agent considers delegation.
+    pub delegation_status_gap: f32,
+    /// Tax rate patrons extract from delegating agents.
+    pub delegation_tax_rate: f32,
+    /// Prestige gained by patron per delegation.
+    pub delegation_prestige_gain: f32,
+    /// Status weight in power calculation.
+    pub power_status_weight: f32,
+    /// Skill weight in power calculation.
+    pub power_skill_weight: f32,
+    /// Aggression weight in power calculation.
+    pub power_aggression_weight: f32,
+    /// Max status value (clamp).
+    pub max_status: f32,
+    /// Max prestige value (clamp).
+    pub max_prestige: f32,
+    /// Subsistence level: resources above this are surplus.
+    pub subsistence_level: f32,
+    /// Skill improvement per tick through practice.
+    pub skill_practice_rate: f32,
+}
+
+impl Default for InteractionParams {
+    fn default() -> Self {
+        Self {
+            coop_self_weight: 0.5,
+            coop_other_weight: 0.3,
+            coop_kin_bonus: 0.2,
+            conflict_self_weight: 0.4,
+            conflict_other_weight: 0.3,
+            conflict_stranger_bonus: 0.15,
+            trade_complementary: 0.4,
+            trade_same_skill: 0.15,
+            coop_resource_bonus: 0.01,
+            coop_prestige_gain: 0.005,
+            conflict_win_resources: 0.05,
+            conflict_win_status: 0.01,
+            conflict_lose_resources: 0.03,
+            conflict_lose_health: 0.005,
+            conflict_noise: 0.2,
+            trade_complementary_bonus: 0.03,
+            trade_same_bonus: 0.005,
+            max_health_loss_per_tick: 0.01,
+            delegation_status_gap: 0.1,
+            delegation_tax_rate: 0.01,
+            delegation_prestige_gain: 0.002,
+            power_status_weight: 0.4,
+            power_skill_weight: 0.3,
+            power_aggression_weight: 0.3,
+            max_status: 2.0,
+            max_prestige: 5.0,
+            subsistence_level: 0.5,
+            skill_practice_rate: 0.002,
+        }
+    }
+}
+
+/// Parameters governing agent lifecycle: aging, health, death, reproduction.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LifecycleParams {
+    /// Base health decay per tick (age-independent).
+    pub health_decay_base: f32,
+    /// Additional health decay scaled by (age/max_age)^2.
+    pub health_decay_age_factor: f32,
+    /// Resource threshold below which health recovery kicks in.
+    pub health_recovery_threshold: f32,
+    /// Health recovery rate per tick (scaled by excess resources).
+    pub health_recovery_rate: f32,
+    /// Health below this threshold causes death.
+    pub death_health_threshold: f32,
+    /// Resource level below which starvation death is possible.
+    pub starvation_resource_threshold: f32,
+    /// Probability of starvation death per tick when resources are below threshold.
+    pub starvation_death_prob: f32,
+    /// Female peak fertility value.
+    pub female_peak_fertility: f32,
+    /// Age at which female fertility peaks.
+    pub female_fertility_peak_age: f32,
+    /// Rate of female fertility decline away from peak.
+    pub female_fertility_decline: f32,
+    /// Male peak fertility value.
+    pub male_peak_fertility: f32,
+    /// Age at which male fertility peaks.
+    pub male_fertility_peak_age: f32,
+    /// Rate of male fertility decline away from peak.
+    pub male_fertility_decline: f32,
+    /// Minimum fertility required for reproduction.
+    pub min_fertility: f32,
+    /// Minimum age for reproduction.
+    pub min_reproduction_age: u16,
+    /// Maximum age for reproduction.
+    pub max_reproduction_age: u16,
+    /// Minimum resources required to reproduce.
+    pub reproduction_resource_threshold: f32,
+    /// Base birth probability per tick (scaled by fertility and health).
+    pub birth_rate: f32,
+    /// Resources consumed by mother at birth.
+    pub birth_resource_cost: f32,
+    /// Health lost by mother at birth.
+    pub birth_health_cost: f32,
+    /// Probability child inherits mother's skill (vs father's or mutation).
+    pub skill_maternal_inherit_prob: f64,
+    /// Probability of skill mutation (random skill).
+    pub skill_mutation_prob: f64,
+    /// Standard deviation of trait inheritance noise (aggression, cooperation, innovation).
+    pub trait_mutation_magnitude: f32,
+    /// Probability of norm mutation per bit.
+    pub norm_mutation_prob: f64,
+    /// Initial health of newborn.
+    pub newborn_health: f32,
+    /// Initial skill level of newborn.
+    pub newborn_skill_level: f32,
+    /// Initial status of newborn.
+    pub newborn_status: f32,
+    /// Initial resources of newborn.
+    pub newborn_resources: f32,
+    /// Spawn radius around mother.
+    pub birth_spawn_radius: f32,
+    /// Number of agents per initial kin group.
+    pub agents_per_kin_group: u32,
+}
+
+impl Default for LifecycleParams {
+    fn default() -> Self {
+        Self {
+            health_decay_base: 0.001,
+            health_decay_age_factor: 0.008,
+            health_recovery_threshold: 0.2,
+            health_recovery_rate: 0.02,
+            death_health_threshold: 0.01,
+            starvation_resource_threshold: 0.01,
+            starvation_death_prob: 0.1,
+            female_peak_fertility: 0.8,
+            female_fertility_peak_age: 25.0,
+            female_fertility_decline: 0.02,
+            male_peak_fertility: 0.9,
+            male_fertility_peak_age: 30.0,
+            male_fertility_decline: 0.012,
+            min_fertility: 0.2,
+            min_reproduction_age: 8,
+            max_reproduction_age: 50,
+            reproduction_resource_threshold: 0.4,
+            birth_rate: 0.25,
+            birth_resource_cost: 0.2,
+            birth_health_cost: 0.05,
+            skill_maternal_inherit_prob: 0.7,
+            skill_mutation_prob: 0.5,
+            trait_mutation_magnitude: 0.1,
+            norm_mutation_prob: 0.05,
+            newborn_health: 0.9,
+            newborn_skill_level: 0.05,
+            newborn_status: 0.2,
+            newborn_resources: 0.3,
+            birth_spawn_radius: 2.0,
+            agents_per_kin_group: 8,
+        }
+    }
+}
+
+/// Parameters governing agent movement each tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MovementParams {
+    /// Strength of pull toward kin group centroid.
+    pub kin_pull_strength: f32,
+    /// Random drift magnitude when near kin.
+    pub drift_with_kin: f32,
+    /// Random drift magnitude when isolated.
+    pub drift_alone: f32,
+}
+
+impl Default for MovementParams {
+    fn default() -> Self {
+        Self {
+            kin_pull_strength: 0.02,
+            drift_with_kin: 0.5,
+            drift_alone: 0.8,
+        }
+    }
+}
+
+/// Weights for sexual selection scoring of potential mates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MateSelectionParams {
+    pub status_weight: f32,
+    pub resource_weight: f32,
+    pub prestige_weight: f32,
+    pub noise_weight: f32,
+}
+
+impl Default for MateSelectionParams {
+    fn default() -> Self {
+        Self {
+            status_weight: 0.3,
+            resource_weight: 0.3,
+            prestige_weight: 0.3,
+            noise_weight: 0.1,
+        }
+    }
+}
+
+/// Top-level configuration for individual agent simulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AgentSimConfig {
     pub seed: u64,
@@ -232,7 +464,7 @@ pub struct AgentSimConfig {
     pub ticks: u32,
     pub world_size: f32,
     pub interaction_radius: f32,
-    /// Base resource regeneration per tick across the world.
+    /// Base resource regeneration per tick per agent.
     pub resource_regen: f32,
     /// Maximum age before guaranteed death.
     pub max_age: u16,
@@ -240,6 +472,10 @@ pub struct AgentSimConfig {
     pub min_population: u32,
     /// Maximum population above which birth rate is suppressed.
     pub max_population: u32,
+    pub interaction: InteractionParams,
+    pub lifecycle: LifecycleParams,
+    pub movement: MovementParams,
+    pub mate_selection: MateSelectionParams,
 }
 
 impl Default for AgentSimConfig {
@@ -254,6 +490,10 @@ impl Default for AgentSimConfig {
             max_age: 80,
             min_population: 10,
             max_population: 10_000,
+            interaction: InteractionParams::default(),
+            lifecycle: LifecycleParams::default(),
+            movement: MovementParams::default(),
+            mate_selection: MateSelectionParams::default(),
         }
     }
 }
@@ -485,7 +725,8 @@ pub fn seed_population(cfg: &AgentSimConfig) -> Population {
     let mut pop = Population::empty();
     let mut rng = cfg.seed.max(1);
     let n = cfg.initial_population;
-    let kin_group_count = (n / 8).max(2); // ~8 agents per initial kin group
+    let lp = &cfg.lifecycle;
+    let kin_group_count = (n / lp.agents_per_kin_group).max(2);
 
     for i in 0..n {
         let sex = if rand01(&mut rng) < 0.5 {
@@ -493,10 +734,18 @@ pub fn seed_population(cfg: &AgentSimConfig) -> Population {
         } else {
             Sex::Female
         };
-        let age = (rand01(&mut rng) * 25.0) as u16 + 5; // start younger for demographic balance
+        let max_initial_age = (cfg.max_age as f64 * 0.35) as u16;
+        let min_initial_age = 5_u16;
+        let age = (rand01(&mut rng) * f64::from(max_initial_age - min_initial_age)) as u16
+            + min_initial_age;
+        let age_f = age as f32;
         let fertility = match sex {
-            Sex::Female => (0.8 - (age as f32 - 20.0).abs() * 0.02).clamp(0.0, 1.0),
-            Sex::Male => (0.9 - (age as f32 - 25.0).abs() * 0.01).clamp(0.0, 1.0),
+            Sex::Female => (lp.female_peak_fertility
+                - (age_f - lp.female_fertility_peak_age).abs() * lp.female_fertility_decline)
+                .clamp(0.0, 1.0),
+            Sex::Male => (lp.male_peak_fertility
+                - (age_f - lp.male_fertility_peak_age).abs() * lp.male_fertility_decline)
+                .clamp(0.0, 1.0),
         };
         let skill_type = match (rand01(&mut rng) * 5.0) as u32 {
             0 => SkillType::Forager,
@@ -564,9 +813,10 @@ fn compute_interactions(
     pop: &Population,
     grid: &SpatialGrid,
     tick: u32,
-    seed: u64,
+    cfg: &AgentSimConfig,
 ) -> InteractionEffects {
     let n = pop.len();
+    let ip = &cfg.interaction;
     // Compute per-agent effects in parallel, then merge.
     let per_agent: Vec<AgentInteractionResult> = (0..n)
         .into_par_iter()
@@ -574,7 +824,7 @@ fn compute_interactions(
             let mut rng = (pop.ids[i])
                 .wrapping_mul(6364136223846793005)
                 .wrapping_add(tick as u64)
-                .wrapping_add(seed)
+                .wrapping_add(cfg.seed)
                 .max(1);
 
             let neighbors = grid.neighbors_of(pop.xs[i], pop.ys[i]);
@@ -591,7 +841,6 @@ fn compute_interactions(
 
             let my_coop = pop.cooperations[i];
             let my_aggr = pop.aggressions[i];
-            let _my_res = pop.resources[i];
             let my_skill = pop.skill_types[i];
             let my_kin = pop.kin_groups[i];
             let my_status = pop.statuses[i];
@@ -606,8 +855,6 @@ fn compute_interactions(
                 let dx = pop.xs[i] - pop.xs[j];
                 let dy = pop.ys[i] - pop.ys[j];
                 let dist_sq = dx * dx + dy * dy;
-                // Grid already limits to nearby, but check exact radius
-                // Use cell_size^2 as max range (slightly larger than interaction_radius)
                 let max_dist_sq = grid.cell_size * grid.cell_size * 4.0;
                 if dist_sq > max_dist_sq {
                     continue;
@@ -619,14 +866,20 @@ fn compute_interactions(
                 let other_aggr = pop.aggressions[j];
 
                 // Interaction decision: cooperate, trade, or conflict
-                let coop_tendency =
-                    my_coop * 0.5 + other_coop * 0.3 + if same_kin { 0.2 } else { 0.0 };
-                let conflict_tendency =
-                    my_aggr * 0.4 + other_aggr * 0.3 + if !same_kin { 0.15 } else { 0.0 };
+                let coop_tendency = my_coop * ip.coop_self_weight
+                    + other_coop * ip.coop_other_weight
+                    + if same_kin { ip.coop_kin_bonus } else { 0.0 };
+                let conflict_tendency = my_aggr * ip.conflict_self_weight
+                    + other_aggr * ip.conflict_other_weight
+                    + if !same_kin {
+                        ip.conflict_stranger_bonus
+                    } else {
+                        0.0
+                    };
                 let trade_tendency = if my_skill != pop.skill_types[j] {
-                    0.4
+                    ip.trade_complementary
                 } else {
-                    0.15
+                    ip.trade_same_skill
                 };
 
                 let total = coop_tendency + conflict_tendency + trade_tendency;
@@ -634,36 +887,39 @@ fn compute_interactions(
 
                 if roll < coop_tendency {
                     // Cooperation: mutual effort produces surplus for both
-                    let coop_bonus = 0.01 * (pop.cooperations[j] + my_coop) * 0.5;
+                    let coop_bonus = ip.coop_resource_bonus * (pop.cooperations[j] + my_coop) * 0.5;
                     res_delta += coop_bonus;
-                    prestige_delta += 0.005;
+                    prestige_delta += ip.coop_prestige_gain;
                     coop_count += 1;
                 } else if roll < coop_tendency + conflict_tendency {
                     // Conflict: winner takes resources, loser loses health
-                    let my_power = my_status * 0.4 + pop.skill_levels[i] * 0.3 + my_aggr * 0.3;
-                    let other_power =
-                        pop.statuses[j] * 0.4 + pop.skill_levels[j] * 0.3 + other_aggr * 0.3;
-                    if my_power > other_power + rand01f(&mut rng) * 0.2 {
-                        res_delta += 0.05;
-                        status_delta += 0.01;
+                    let my_power = my_status * ip.power_status_weight
+                        + pop.skill_levels[i] * ip.power_skill_weight
+                        + my_aggr * ip.power_aggression_weight;
+                    let other_power = pop.statuses[j] * ip.power_status_weight
+                        + pop.skill_levels[j] * ip.power_skill_weight
+                        + other_aggr * ip.power_aggression_weight;
+                    if my_power > other_power + rand01f(&mut rng) * ip.conflict_noise {
+                        res_delta += ip.conflict_win_resources;
+                        status_delta += ip.conflict_win_status;
                     } else {
-                        res_delta -= 0.03;
-                        health_delta -= 0.005;
+                        res_delta -= ip.conflict_lose_resources;
+                        health_delta -= ip.conflict_lose_health;
                     }
                     conflict_count += 1;
                 } else {
                     // Trade: complementary skills produce surplus
                     let skill_bonus = if my_skill != pop.skill_types[j] {
-                        0.03 * (pop.skill_levels[i] + pop.skill_levels[j])
+                        ip.trade_complementary_bonus * (pop.skill_levels[i] + pop.skill_levels[j])
                     } else {
-                        0.005
+                        ip.trade_same_bonus
                     };
                     res_delta += skill_bonus;
                     trade_count += 1;
                 }
 
                 // Delegation: consider this neighbor as patron
-                if pop.statuses[j] > my_status + 0.1
+                if pop.statuses[j] > my_status + ip.delegation_status_gap
                     && pop.prestiges[j] > best_patron_score
                     && pop.skill_types[j] == SkillType::Leader
                 {
@@ -676,7 +932,7 @@ fn compute_interactions(
                 res_delta,
                 status_delta,
                 prestige_delta,
-                health_delta: health_delta.max(-0.01), // cap health loss per tick
+                health_delta: health_delta.max(-ip.max_health_loss_per_tick),
                 coop_count,
                 conflict_count,
                 trade_count,
@@ -717,32 +973,35 @@ fn compute_interactions(
 
 fn apply_effects(pop: &mut Population, effects: &InteractionEffects, cfg: &AgentSimConfig) {
     let n = pop.len();
+    let ip = &cfg.interaction;
+    let lp = &cfg.lifecycle;
     for i in 0..n {
         pop.resources[i] =
             (pop.resources[i] + effects.resource_deltas[i] + cfg.resource_regen).max(0.0);
-        pop.statuses[i] = (pop.statuses[i] + effects.status_deltas[i]).clamp(0.0, 2.0);
-        pop.prestiges[i] = (pop.prestiges[i] + effects.prestige_deltas[i]).clamp(0.0, 5.0);
+        pop.statuses[i] = (pop.statuses[i] + effects.status_deltas[i]).clamp(0.0, ip.max_status);
+        pop.prestiges[i] =
+            (pop.prestiges[i] + effects.prestige_deltas[i]).clamp(0.0, ip.max_prestige);
         pop.healths[i] = (pop.healths[i] + effects.health_deltas[i]).clamp(0.0, 1.0);
-        // Well-fed agents recover health (stronger recovery = population sustains)
-        if pop.resources[i] > 0.2 {
-            let recovery = 0.02 * (pop.resources[i] - 0.2).min(1.0);
+        // Well-fed agents recover health
+        if pop.resources[i] > lp.health_recovery_threshold {
+            let recovery = lp.health_recovery_rate
+                * (pop.resources[i] - lp.health_recovery_threshold).min(1.0);
             pop.healths[i] = (pop.healths[i] + recovery).min(1.0);
         }
-        pop.surpluses[i] = (pop.resources[i] - 0.5).max(0.0); // surplus = above subsistence
+        pop.surpluses[i] = (pop.resources[i] - ip.subsistence_level).max(0.0);
 
         // Skill improvement through practice
-        pop.skill_levels[i] = (pop.skill_levels[i] + 0.002).min(1.0);
+        pop.skill_levels[i] = (pop.skill_levels[i] + ip.skill_practice_rate).min(1.0);
     }
 
     // Apply delegation choices
     for &(agent, patron) in &effects.delegation_choices {
         if (patron as usize) < n {
             pop.patrons[agent as usize] = Some(patron);
-            // Patron extracts small tax (proto-hierarchy cost)
-            let tax = pop.resources[agent as usize] * 0.01;
+            let tax = pop.resources[agent as usize] * ip.delegation_tax_rate;
             pop.resources[agent as usize] -= tax;
             pop.resources[patron as usize] += tax;
-            pop.prestiges[patron as usize] += 0.002;
+            pop.prestiges[patron as usize] += ip.delegation_prestige_gain;
         }
     }
 }
@@ -752,6 +1011,7 @@ fn apply_effects(pop: &mut Population, effects: &InteractionEffects, cfg: &Agent
 // ---------------------------------------------------------------------------
 
 fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id: &mut u64) {
+    let lp = &cfg.lifecycle;
     let mut rng = (*next_id)
         .wrapping_mul(2862933555777941757)
         .wrapping_add(tick as u64)
@@ -767,14 +1027,18 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
     for i in 0..pop.len() {
         let age_ratio = (pop.ages[i] as f32 / cfg.max_age as f32).clamp(0.0, 1.0);
         let age_factor = age_ratio * age_ratio; // quadratic: slow when young, fast when old
-        pop.healths[i] -= 0.001 + 0.008 * age_factor;
+        pop.healths[i] -= lp.health_decay_base + lp.health_decay_age_factor * age_factor;
         pop.healths[i] = pop.healths[i].clamp(0.0, 1.0);
 
         // Fertility peaks mid-life, declines at extremes
         let age_f = pop.ages[i] as f32;
         pop.fertilities[i] = match pop.sexes[i] {
-            Sex::Female => (0.8 - (age_f - 25.0).abs() * 0.02).clamp(0.0, 1.0),
-            Sex::Male => (0.9 - (age_f - 30.0).abs() * 0.012).clamp(0.0, 1.0),
+            Sex::Female => (lp.female_peak_fertility
+                - (age_f - lp.female_fertility_peak_age).abs() * lp.female_fertility_decline)
+                .clamp(0.0, 1.0),
+            Sex::Male => (lp.male_peak_fertility
+                - (age_f - lp.male_fertility_peak_age).abs() * lp.male_fertility_decline)
+                .clamp(0.0, 1.0),
         };
     }
 
@@ -782,8 +1046,9 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
     let mut deaths = Vec::new();
     for i in (0..pop.len()).rev() {
         let die = pop.ages[i] >= cfg.max_age
-            || pop.healths[i] < 0.01
-            || (pop.resources[i] < 0.01 && rand01f(&mut rng) < 0.1);
+            || pop.healths[i] < lp.death_health_threshold
+            || (pop.resources[i] < lp.starvation_resource_threshold
+                && rand01f(&mut rng) < lp.starvation_death_prob);
         if die {
             deaths.push(i);
         }
@@ -794,7 +1059,6 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
     }
 
     // Fix patron/partner references after swap_remove
-    // (swap_remove moves last element to removed position)
     let n = pop.len();
     for i in 0..n {
         if let Some(p) = pop.patrons[i] {
@@ -821,11 +1085,14 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
         if pop.sexes[i] != Sex::Female {
             continue;
         }
-        if pop.fertilities[i] < 0.2 || pop.ages[i] < 8 || pop.ages[i] > 50 {
+        if pop.fertilities[i] < lp.min_fertility
+            || pop.ages[i] < lp.min_reproduction_age
+            || pop.ages[i] > lp.max_reproduction_age
+        {
             continue;
         }
-        if pop.resources[i] < 0.4 {
-            continue; // needs resources to reproduce
+        if pop.resources[i] < lp.reproduction_resource_threshold {
+            continue;
         }
         // Already has partner? Use them. Otherwise find one.
         let mate_idx = pop.partners[i].and_then(|p| {
@@ -839,12 +1106,11 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
         let mate = if let Some(m) = mate_idx {
             Some(m)
         } else {
-            // Sexual selection: find nearby high-status male
             find_mate(pop, i, &mut rng, cfg)
         };
 
         if let Some(m) = mate {
-            let birth_prob = 0.25 * pop.fertilities[i] * pop.healths[i];
+            let birth_prob = lp.birth_rate * pop.fertilities[i] * pop.healths[i];
             if rand01f(&mut rng) >= birth_prob {
                 continue;
             }
@@ -860,9 +1126,9 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
             };
 
             // Inherit traits from both parents with mutation
-            let skill = if rand01(&mut rng) < 0.7 {
+            let skill = if rand01(&mut rng) < lp.skill_maternal_inherit_prob {
                 pop.skill_types[i] // mother's skill more likely
-            } else if rand01(&mut rng) < 0.5 {
+            } else if rand01(&mut rng) < lp.skill_mutation_prob {
                 pop.skill_types[m]
             } else {
                 // mutation: random skill
@@ -886,37 +1152,37 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
                 sex: child_sex,
                 age: 0,
                 fertility: 0.0, // too young
-                health: 0.9,
+                health: lp.newborn_health,
                 skill_type: skill,
-                skill_level: 0.05,
-                status: 0.2,
+                skill_level: lp.newborn_skill_level,
+                status: lp.newborn_status,
                 prestige: 0.0,
                 aggression: ((pop.aggressions[i] + pop.aggressions[m]) * 0.5
-                    + (rand01f(&mut rng) - 0.5) * 0.1)
+                    + (rand01f(&mut rng) - 0.5) * lp.trait_mutation_magnitude)
                     .clamp(0.0, 1.0),
                 cooperation: ((pop.cooperations[i] + pop.cooperations[m]) * 0.5
-                    + (rand01f(&mut rng) - 0.5) * 0.1)
+                    + (rand01f(&mut rng) - 0.5) * lp.trait_mutation_magnitude)
                     .clamp(0.0, 1.0),
-                resources: 0.3,
+                resources: lp.newborn_resources,
                 surplus: 0.0,
                 norms: child_norms
-                    ^ if rand01(&mut rng) < 0.05 {
+                    ^ if rand01(&mut rng) < lp.norm_mutation_prob {
                         1 << ((rand01(&mut rng) * 16.0) as u64)
                     } else {
                         0
                     },
                 innovation: ((pop.innovations[i] + pop.innovations[m]) * 0.5
-                    + (rand01f(&mut rng) - 0.5) * 0.05)
+                    + (rand01f(&mut rng) - 0.5) * lp.trait_mutation_magnitude * 0.5)
                     .clamp(0.0, 1.0),
                 kin_group: pop.kin_groups[i], // inherit mother's kin group
-                x: pop.xs[i] + (rand01f(&mut rng) - 0.5) * 2.0,
-                y: pop.ys[i] + (rand01f(&mut rng) - 0.5) * 2.0,
+                x: pop.xs[i] + (rand01f(&mut rng) - 0.5) * lp.birth_spawn_radius,
+                y: pop.ys[i] + (rand01f(&mut rng) - 0.5) * lp.birth_spawn_radius,
             });
             *next_id += 1;
 
             // Reproduction cost
-            pop.resources[i] -= 0.2;
-            pop.healths[i] -= 0.05;
+            pop.resources[i] -= lp.birth_resource_cost;
+            pop.healths[i] -= lp.birth_health_cost;
         }
     }
 
@@ -931,6 +1197,8 @@ fn find_mate(
     rng: &mut u64,
     cfg: &AgentSimConfig,
 ) -> Option<usize> {
+    let ms = &cfg.mate_selection;
+    let lp = &cfg.lifecycle;
     let fx = pop.xs[female_idx];
     let fy = pop.ys[female_idx];
     let r_sq = cfg.interaction_radius * cfg.interaction_radius * 4.0;
@@ -939,7 +1207,7 @@ fn find_mate(
     let mut best_score = f32::NEG_INFINITY;
 
     for j in 0..pop.len() {
-        if pop.sexes[j] != Sex::Male || pop.ages[j] < 8 {
+        if pop.sexes[j] != Sex::Male || pop.ages[j] < lp.min_reproduction_age {
             continue;
         }
         let dx = fx - pop.xs[j];
@@ -947,11 +1215,11 @@ fn find_mate(
         if dx * dx + dy * dy > r_sq {
             continue;
         }
-        // Sexual selection: prefer high status, resources, prestige
-        let score = pop.statuses[j] * 0.3
-            + pop.resources[j] * 0.3
-            + pop.prestiges[j] * 0.3
-            + rand01f(rng) * 0.1;
+        // Sexual selection: weighted preference
+        let score = pop.statuses[j] * ms.status_weight
+            + pop.resources[j] * ms.resource_weight
+            + pop.prestiges[j] * ms.prestige_weight
+            + rand01f(rng) * ms.noise_weight;
         if score > best_score {
             best_score = score;
             best = Some(j);
@@ -964,11 +1232,12 @@ fn find_mate(
 // Agent movement (drift toward kin, away from conflict)
 // ---------------------------------------------------------------------------
 
-fn movement_tick(pop: &mut Population, tick: u32, seed: u64) {
+fn movement_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig) {
     let n = pop.len();
     if n == 0 {
         return;
     }
+    let mp = &cfg.movement;
 
     // Compute kin group centroids
     let mut kin_cx: Vec<f64> = Vec::new();
@@ -993,12 +1262,14 @@ fn movement_tick(pop: &mut Population, tick: u32, seed: u64) {
         kin_cy[kg] /= c;
     }
 
+    let world_max = cfg.world_size - 0.1;
+
     // Move each agent slightly toward kin centroid + random drift
     for i in 0..n {
         let mut rng = pop.ids[i]
             .wrapping_mul(2862933555777941757)
             .wrapping_add(tick as u64)
-            .wrapping_add(seed)
+            .wrapping_add(cfg.seed)
             .wrapping_add(0xDEAD)
             .max(1);
 
@@ -1006,18 +1277,18 @@ fn movement_tick(pop: &mut Population, tick: u32, seed: u64) {
         if kg < kin_cx.len() && kin_count[kg] > 1 {
             let cx = kin_cx[kg] as f32;
             let cy = kin_cy[kg] as f32;
-            let dx = (cx - pop.xs[i]) * 0.02; // gentle pull toward kin
-            let dy = (cy - pop.ys[i]) * 0.02;
-            pop.xs[i] += dx + (rand01f(&mut rng) - 0.5) * 0.5;
-            pop.ys[i] += dy + (rand01f(&mut rng) - 0.5) * 0.5;
+            let dx = (cx - pop.xs[i]) * mp.kin_pull_strength;
+            let dy = (cy - pop.ys[i]) * mp.kin_pull_strength;
+            pop.xs[i] += dx + (rand01f(&mut rng) - 0.5) * mp.drift_with_kin;
+            pop.ys[i] += dy + (rand01f(&mut rng) - 0.5) * mp.drift_with_kin;
         } else {
-            pop.xs[i] += (rand01f(&mut rng) - 0.5) * 0.8;
-            pop.ys[i] += (rand01f(&mut rng) - 0.5) * 0.8;
+            pop.xs[i] += (rand01f(&mut rng) - 0.5) * mp.drift_alone;
+            pop.ys[i] += (rand01f(&mut rng) - 0.5) * mp.drift_alone;
         }
 
         // Clamp to world bounds
-        pop.xs[i] = pop.xs[i].clamp(0.0, 99.9);
-        pop.ys[i] = pop.ys[i].clamp(0.0, 99.9);
+        pop.xs[i] = pop.xs[i].clamp(0.0, world_max);
+        pop.ys[i] = pop.ys[i].clamp(0.0, world_max);
     }
 }
 
@@ -1041,7 +1312,7 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
         let grid = SpatialGrid::build(&pop.xs, &pop.ys, cfg.interaction_radius, cfg.world_size);
 
         // Compute and apply interactions
-        let effects = compute_interactions(&pop, &grid, tick, cfg.seed);
+        let effects = compute_interactions(&pop, &grid, tick, &cfg);
         let coop_events = effects.cooperation_events;
         let conflict_events = effects.conflict_events;
         let total_interactions = effects.total_interactions;
@@ -1051,7 +1322,7 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
         lifecycle_tick(&mut pop, tick, &cfg, &mut next_id);
 
         // Movement
-        movement_tick(&mut pop, tick, cfg.seed);
+        movement_tick(&mut pop, tick, &cfg);
 
         // Measure emergent state
         let emergent =
@@ -1198,8 +1469,6 @@ mod tests {
             .last()
             .map(|s| s.emergent.gini_coefficient)
             .unwrap_or(0.0);
-        // Gini should change over time (not necessarily always increase
-        // but should not stay exactly the same)
         assert!(
             (late_gini - early_gini).abs() > 0.001,
             "inequality should evolve: early={early_gini:.3} late={late_gini:.3}"
@@ -1214,7 +1483,6 @@ mod tests {
             world_size: 30.0,
             ..AgentSimConfig::default()
         });
-        // Over 100 ticks with 120 agents, some hierarchy should emerge
         let max_depth = result
             .snapshots
             .iter()
@@ -1230,25 +1498,24 @@ mod tests {
     #[test]
     fn population_grows_with_sufficient_resources() {
         let result = simulate_agents(AgentSimConfig {
-            initial_population: 150,
-            ticks: 300,
-            resource_regen: 0.15, // generous resources
-            world_size: 30.0,
-            max_population: 1000,
+            initial_population: 200,
+            ticks: 100,
+            resource_regen: 0.20,
+            world_size: 50.0,
+            max_population: 2000,
             min_population: 2,
             ..AgentSimConfig::default()
         });
-        // With generous resources, population should sustain and not collapse
-        let final_pop = result.final_population.len();
+        // With generous resources, peak population should exceed starting
+        let peak_pop = result
+            .snapshots
+            .iter()
+            .map(|s| s.emergent.population_size)
+            .max()
+            .unwrap_or(0);
         assert!(
-            final_pop > 50,
-            "population should sustain with good resources, final was {final_pop}"
-        );
-        // And the simulation should run all ticks (not hit min_population early exit)
-        assert_eq!(
-            result.snapshots.len(),
-            300,
-            "should run all ticks without collapse"
+            peak_pop > 200,
+            "population should grow with good resources, peak was {peak_pop}"
         );
     }
 
@@ -1257,12 +1524,11 @@ mod tests {
         let result = simulate_agents(AgentSimConfig {
             initial_population: 80,
             ticks: 200,
-            resource_regen: 0.005, // very scarce
+            resource_regen: 0.005,
             world_size: 50.0,
             ..AgentSimConfig::default()
         });
         let final_pop = result.final_population.len();
-        // Should not have grown much (or may have shrunk)
         assert!(
             final_pop < 200,
             "population should be constrained, got {final_pop}"

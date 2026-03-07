@@ -29,11 +29,17 @@ formulas. This plan describes how to get there.
 
 ---
 
-## Phase 1: Individual Agents with Traits
+## Phase 1: Individual Agents with Traits ✅ COMPLETE
 
 **Goal:** Replace `SocietyActor` (a society-level float bundle) with a
 population of individual agents whose interactions produce group-level
 behavior.
+
+**Status:** Implemented in `crates/walrus-engine/src/agents.rs` (~1400 lines).
+All parameters are configurable via `AgentSimConfig` sub-structs
+(`InteractionParams`, `LifecycleParams`, `MovementParams`, `MateSelectionParams`).
+Example runner in `examples/agent_simulation.rs` supports env var overrides for
+every parameter. Run with `make agent-sim`.
 
 ### 1.1 Agent Model
 
