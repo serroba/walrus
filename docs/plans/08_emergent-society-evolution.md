@@ -244,10 +244,19 @@ eroei(t) = base_eroei * (1 - depletion)^steepness
 
 ---
 
-## Phase 3: Emergent Institutions
+## Phase 3: Emergent Institutions ✅ COMPLETE
 
 **Goal:** Replace formula-driven `institutional_centralization` and
 `policy_lock_in` with institutions that emerge from agent interactions.
+
+**Status:** Implemented in `crates/walrus-engine/src/agents.rs`. Institutions
+are detected patterns, not coded structs. Coercion rate tracks voluntary vs
+involuntary resource transfers. Property norms measured from intra-kin conflict
+rates. Leadership detected when >50% of a kin group shares a patron. Public
+goods investment: patrons split tax between personal wealth and group benefits.
+Patron inheritance: children adopt mother's patron (institutional lock-in).
+Institutional classification (Band/Tribe/Chiefdom/State) emerges from hierarchy
+depth and population size. Configurable via `InstitutionParams`. 6 new tests.
 
 ### 3.1 Institution as Persistent Pattern
 

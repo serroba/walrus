@@ -1,8 +1,8 @@
 use std::env;
 
 use walrus_engine::agents::{
-    simulate_agents, AgentSimConfig, EnergyParams, InteractionParams, LifecycleParams,
-    MateSelectionParams, MovementParams,
+    simulate_agents, AgentSimConfig, EnergyParams, InstitutionParams, InteractionParams,
+    LifecycleParams, MateSelectionParams, MovementParams,
 };
 
 fn env_f32(key: &str, default: f32) -> f32 {
@@ -185,6 +185,19 @@ fn build_config() -> AgentSimConfig {
             prestige_weight: env_f32("MATE_PRESTIGE_WEIGHT", dms.prestige_weight),
             noise_weight: env_f32("MATE_NOISE_WEIGHT", dms.noise_weight),
         },
+        institution: InstitutionParams {
+            public_goods_rate: env_f32("PUBLIC_GOODS_RATE", d.institution.public_goods_rate),
+            public_goods_bonus: env_f32("PUBLIC_GOODS_BONUS", d.institution.public_goods_bonus),
+            defense_bonus: env_f32("DEFENSE_BONUS", d.institution.defense_bonus),
+            leadership_threshold: env_f32(
+                "LEADERSHIP_THRESHOLD",
+                d.institution.leadership_threshold,
+            ),
+            patron_inheritance: env::var("PATRON_INHERITANCE")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(d.institution.patron_inheritance),
+        },
     }
 }
 
@@ -198,10 +211,20 @@ fn energy_type_name(code: u8) -> &'static str {
     }
 }
 
+fn institution_type_name(code: u8) -> &'static str {
+    match code {
+        0 => "band",
+        1 => "tribe",
+        2 => "chiefdom",
+        3 => "state",
+        _ => "unknown",
+    }
+}
+
 fn main() {
     let cfg = build_config();
 
-    eprintln!("Agent Simulation (Phase 2: Energy Model)");
+    eprintln!("Agent Simulation (Phase 3: Emergent Institutions)");
     eprintln!(
         "  pop={} ticks={} world={} radius={}",
         cfg.initial_population, cfg.ticks, cfg.world_size, cfg.interaction_radius
@@ -227,11 +250,11 @@ fn main() {
 
     let result = simulate_agents(cfg);
 
-    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion");
+    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure");
     for snap in &result.snapshots {
         let e = &snap.emergent;
         println!(
-            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4}",
+            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1}",
             snap.tick,
             e.population_size,
             e.mean_resources,
@@ -251,6 +274,13 @@ fn main() {
             e.mean_eroei,
             e.biomass_depletion,
             e.fossil_depletion,
+            e.coercion_rate,
+            e.property_norm_strength,
+            institution_type_name(e.institutional_type),
+            e.public_goods_investment,
+            e.patron_count,
+            e.recognized_leaders,
+            e.mean_patron_tenure,
         );
     }
 
