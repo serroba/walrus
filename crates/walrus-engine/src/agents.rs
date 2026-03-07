@@ -25,6 +25,98 @@ pub enum SkillType {
     Warrior,
 }
 
+// ---------------------------------------------------------------------------
+// Energy model (Phase 2)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EnergyType {
+    Biomass = 0,
+    Agriculture = 1,
+    Fossil = 2,
+    Renewable = 3,
+}
+
+impl EnergyType {
+    pub const ALL: [EnergyType; 4] = [
+        EnergyType::Biomass,
+        EnergyType::Agriculture,
+        EnergyType::Fossil,
+        EnergyType::Renewable,
+    ];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnergySource {
+    pub stock: f64,
+    pub initial_stock: f64,
+    pub flow_rate: f64,
+    pub base_eroei: f64,
+    pub tech_threshold: f32,
+    pub steepness: f64,
+}
+
+impl EnergySource {
+    pub fn depletion(&self) -> f64 {
+        if self.initial_stock <= 0.0 || self.initial_stock.is_infinite() {
+            return 0.0;
+        }
+        (1.0 - self.stock / self.initial_stock).clamp(0.0, 1.0)
+    }
+
+    pub fn current_eroei(&self) -> f64 {
+        self.base_eroei * (1.0 - self.depletion()).powf(self.steepness)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnergyCell {
+    pub sources: [EnergySource; 4],
+}
+
+#[derive(Clone, Debug)]
+pub struct EnergyLandscape {
+    pub cells: Vec<EnergyCell>,
+    cols: usize,
+    rows: usize,
+    cell_size: f32,
+}
+
+impl EnergyLandscape {
+    pub fn mean_depletion(&self, energy_type: EnergyType) -> f64 {
+        let idx = energy_type as usize;
+        if self.cells.is_empty() {
+            return 0.0;
+        }
+        let sum: f64 = self.cells.iter().map(|c| c.sources[idx].depletion()).sum();
+        sum / self.cells.len() as f64
+    }
+
+    pub fn total_pollution(&self) -> f64 {
+        // Pollution tracked per-source is just depletion * extraction impact
+        // For simplicity, use depletion as a proxy for cumulative pollution
+        self.cells
+            .iter()
+            .flat_map(|c| c.sources.iter())
+            .map(|s| {
+                if s.initial_stock.is_infinite() {
+                    0.0
+                } else {
+                    s.depletion() * s.initial_stock * 0.01
+                }
+            })
+            .sum()
+    }
+}
+
+/// Summary of energy harvested in a single tick.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EnergyTickSummary {
+    pub energy_by_type: [f64; 4],
+    pub total_net_energy: f64,
+    pub agents_harvesting: u32,
+}
+
 /// Struct-of-arrays population for cache-friendly parallel access.
 /// At ~108 bytes per agent, 1M agents ≈ 108 MB.
 #[derive(Clone, Debug)]
@@ -376,6 +468,8 @@ pub struct LifecycleParams {
     pub birth_spawn_radius: f32,
     /// Number of agents per initial kin group.
     pub agents_per_kin_group: u32,
+    /// Per-tick innovation growth (learning by doing).
+    pub innovation_growth_rate: f32,
 }
 
 impl Default for LifecycleParams {
@@ -411,6 +505,7 @@ impl Default for LifecycleParams {
             newborn_resources: 0.3,
             birth_spawn_radius: 2.0,
             agents_per_kin_group: 8,
+            innovation_growth_rate: 0.0003,
         }
     }
 }
@@ -456,6 +551,79 @@ impl Default for MateSelectionParams {
     }
 }
 
+/// Parameters for the energy landscape and EROEI dynamics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnergyParams {
+    // Biomass: available everywhere, regenerates, low EROEI
+    pub biomass_base_eroei: f64,
+    pub biomass_initial_stock: f64,
+    pub biomass_flow_rate: f64,
+    pub biomass_steepness: f64,
+    pub biomass_tech_threshold: f32,
+    pub biomass_regen_rate: f64,
+
+    // Agriculture: fertile areas only, high stock, medium EROEI
+    pub agriculture_base_eroei: f64,
+    pub agriculture_initial_stock: f64,
+    pub agriculture_flow_rate: f64,
+    pub agriculture_steepness: f64,
+    pub agriculture_tech_threshold: f32,
+    pub agriculture_fertility_prob: f64,
+
+    // Fossil: rare deposits, finite, very high initial EROEI
+    pub fossil_base_eroei: f64,
+    pub fossil_initial_stock: f64,
+    pub fossil_flow_rate: f64,
+    pub fossil_steepness: f64,
+    pub fossil_tech_threshold: f32,
+    pub fossil_abundance: f64,
+
+    // Renewable: everywhere, infinite, requires high tech
+    pub renewable_base_eroei: f64,
+    pub renewable_flow_rate: f64,
+    pub renewable_tech_threshold: f32,
+
+    /// Scaling factor for per-agent extraction rate.
+    pub harvest_per_agent: f64,
+}
+
+impl Default for EnergyParams {
+    fn default() -> Self {
+        Self {
+            // Biomass: base EROEI ~5:1, net ~0.05/agent matching old resource_regen
+            biomass_base_eroei: 5.0,
+            biomass_initial_stock: 100.0,
+            biomass_flow_rate: 0.0625,
+            biomass_steepness: 2.0,
+            biomass_tech_threshold: 0.0,
+            biomass_regen_rate: 0.05,
+
+            // Agriculture: base EROEI ~10:1, needs innovation ~0.25
+            agriculture_base_eroei: 10.0,
+            agriculture_initial_stock: 500.0,
+            agriculture_flow_rate: 0.15,
+            agriculture_steepness: 1.5,
+            agriculture_tech_threshold: 0.25,
+            agriculture_fertility_prob: 0.4,
+
+            // Fossil: base EROEI ~100:1, rare (15% of cells), needs innovation ~0.5
+            fossil_base_eroei: 100.0,
+            fossil_initial_stock: 200.0,
+            fossil_flow_rate: 0.5,
+            fossil_steepness: 3.0,
+            fossil_tech_threshold: 0.5,
+            fossil_abundance: 0.15,
+
+            // Renewable: EROEI ~15:1, infinite, needs innovation ~0.75
+            renewable_base_eroei: 15.0,
+            renewable_flow_rate: 0.2,
+            renewable_tech_threshold: 0.75,
+
+            harvest_per_agent: 1.0,
+        }
+    }
+}
+
 /// Top-level configuration for individual agent simulation.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AgentSimConfig {
@@ -464,8 +632,8 @@ pub struct AgentSimConfig {
     pub ticks: u32,
     pub world_size: f32,
     pub interaction_radius: f32,
-    /// Base resource regeneration per tick per agent.
-    pub resource_regen: f32,
+    /// Energy landscape parameters (replaces flat resource_regen).
+    pub energy: EnergyParams,
     /// Maximum age before guaranteed death.
     pub max_age: u16,
     /// Minimum population below which simulation stops.
@@ -486,7 +654,7 @@ impl Default for AgentSimConfig {
             ticks: 500,
             world_size: 100.0,
             interaction_radius: 8.0,
-            resource_regen: 0.05,
+            energy: EnergyParams::default(),
             max_age: 80,
             min_population: 10,
             max_population: 10_000,
@@ -517,6 +685,12 @@ pub struct EmergentState {
     pub conflict_rate: f32,
     pub mean_prestige: f32,
     pub mean_health: f32,
+    pub mean_innovation: f32,
+    pub dominant_energy: u8,
+    pub energy_per_capita: f32,
+    pub mean_eroei: f32,
+    pub biomass_depletion: f32,
+    pub fossil_depletion: f32,
 }
 
 /// Per-tick snapshot of the simulation state.
@@ -531,6 +705,7 @@ pub struct AgentSnapshot {
 pub struct AgentSimResult {
     pub snapshots: Vec<AgentSnapshot>,
     pub final_population: Population,
+    pub final_landscape: EnergyLandscape,
 }
 
 // ---------------------------------------------------------------------------
@@ -655,6 +830,8 @@ fn measure_emergent_state(
     cooperation_events: u32,
     conflict_events: u32,
     total_interactions: u32,
+    energy_summary: &EnergyTickSummary,
+    landscape: &EnergyLandscape,
 ) -> EmergentState {
     let n = pop.len() as u32;
     let gini = if pop.len() > 500 {
@@ -699,6 +876,47 @@ fn measure_emergent_state(
         } else {
             0.0
         },
+        mean_innovation: if n > 0 {
+            pop.innovations.iter().sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
+        dominant_energy: {
+            let e = &energy_summary.energy_by_type;
+            let mut best = 0_u8;
+            let mut best_val = e[0];
+            for (i, &val) in e.iter().enumerate().skip(1) {
+                if val > best_val {
+                    best = i as u8;
+                    best_val = val;
+                }
+            }
+            best
+        },
+        energy_per_capita: if n > 0 {
+            (energy_summary.total_net_energy / f64::from(n)) as f32
+        } else {
+            0.0
+        },
+        mean_eroei: {
+            let mut sum = 0.0_f64;
+            let mut count = 0_u32;
+            for cell in &landscape.cells {
+                for src in &cell.sources {
+                    if src.flow_rate > 0.0 && src.stock > 0.0 {
+                        sum += src.current_eroei();
+                        count += 1;
+                    }
+                }
+            }
+            if count > 0 {
+                (sum / f64::from(count)) as f32
+            } else {
+                0.0
+            }
+        },
+        biomass_depletion: landscape.mean_depletion(EnergyType::Biomass) as f32,
+        fossil_depletion: landscape.mean_depletion(EnergyType::Fossil) as f32,
     }
 }
 
@@ -976,8 +1194,7 @@ fn apply_effects(pop: &mut Population, effects: &InteractionEffects, cfg: &Agent
     let ip = &cfg.interaction;
     let lp = &cfg.lifecycle;
     for i in 0..n {
-        pop.resources[i] =
-            (pop.resources[i] + effects.resource_deltas[i] + cfg.resource_regen).max(0.0);
+        pop.resources[i] = (pop.resources[i] + effects.resource_deltas[i]).max(0.0);
         pop.statuses[i] = (pop.statuses[i] + effects.status_deltas[i]).clamp(0.0, ip.max_status);
         pop.prestiges[i] =
             (pop.prestiges[i] + effects.prestige_deltas[i]).clamp(0.0, ip.max_prestige);
@@ -1040,6 +1257,11 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
                 - (age_f - lp.male_fertility_peak_age).abs() * lp.male_fertility_decline)
                 .clamp(0.0, 1.0),
         };
+    }
+
+    // Innovation growth (learning by doing, cumulative knowledge)
+    for i in 0..pop.len() {
+        pop.innovations[i] = (pop.innovations[i] + lp.innovation_growth_rate).min(1.0);
     }
 
     // Death: old age, low health, or starvation
@@ -1293,6 +1515,187 @@ fn movement_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig) {
 }
 
 // ---------------------------------------------------------------------------
+// Energy landscape
+// ---------------------------------------------------------------------------
+
+fn init_energy_landscape(cfg: &AgentSimConfig) -> EnergyLandscape {
+    let ep = &cfg.energy;
+    let cell_size = cfg.interaction_radius;
+    let cols = (cfg.world_size / cell_size).ceil() as usize + 1;
+    let rows = cols;
+    let mut cells = Vec::with_capacity(cols * rows);
+    let mut rng = cfg.seed.wrapping_mul(0x517cc1b727220a95).max(1);
+
+    for _ in 0..(cols * rows) {
+        let biomass_var = 0.5 + rand01(&mut rng);
+        let fertility_roll = rand01(&mut rng);
+        let fossil_roll = rand01(&mut rng);
+        let fossil_var = 0.5 + rand01(&mut rng);
+
+        let is_fertile = fertility_roll < ep.agriculture_fertility_prob;
+        let has_fossil = fossil_roll < ep.fossil_abundance;
+
+        let biomass = EnergySource {
+            stock: ep.biomass_initial_stock * biomass_var,
+            initial_stock: ep.biomass_initial_stock * biomass_var,
+            flow_rate: ep.biomass_flow_rate * biomass_var,
+            base_eroei: ep.biomass_base_eroei,
+            tech_threshold: ep.biomass_tech_threshold,
+            steepness: ep.biomass_steepness,
+        };
+
+        let agriculture = EnergySource {
+            stock: if is_fertile {
+                ep.agriculture_initial_stock * fertility_roll
+            } else {
+                0.0
+            },
+            initial_stock: if is_fertile {
+                ep.agriculture_initial_stock * fertility_roll
+            } else {
+                0.0
+            },
+            flow_rate: if is_fertile {
+                ep.agriculture_flow_rate * fertility_roll
+            } else {
+                0.0
+            },
+            base_eroei: ep.agriculture_base_eroei,
+            tech_threshold: ep.agriculture_tech_threshold,
+            steepness: ep.agriculture_steepness,
+        };
+
+        let fossil = EnergySource {
+            stock: if has_fossil {
+                ep.fossil_initial_stock * fossil_var
+            } else {
+                0.0
+            },
+            initial_stock: if has_fossil {
+                ep.fossil_initial_stock * fossil_var
+            } else {
+                0.0
+            },
+            flow_rate: if has_fossil { ep.fossil_flow_rate } else { 0.0 },
+            base_eroei: ep.fossil_base_eroei,
+            tech_threshold: ep.fossil_tech_threshold,
+            steepness: ep.fossil_steepness,
+        };
+
+        let renewable = EnergySource {
+            stock: f64::INFINITY,
+            initial_stock: f64::INFINITY,
+            flow_rate: ep.renewable_flow_rate,
+            base_eroei: ep.renewable_base_eroei,
+            tech_threshold: ep.renewable_tech_threshold,
+            steepness: 1.0,
+        };
+
+        cells.push(EnergyCell {
+            sources: [biomass, agriculture, fossil, renewable],
+        });
+    }
+
+    EnergyLandscape {
+        cells,
+        cols,
+        rows,
+        cell_size,
+    }
+}
+
+fn energy_harvest_tick(
+    pop: &mut Population,
+    landscape: &mut EnergyLandscape,
+    cfg: &AgentSimConfig,
+) -> EnergyTickSummary {
+    let ep = &cfg.energy;
+    let n = pop.len();
+    if n == 0 {
+        return EnergyTickSummary::default();
+    }
+
+    let cols = landscape.cols;
+    let rows = landscape.rows;
+    let cell_size = landscape.cell_size;
+    let num_cells = cols * rows;
+
+    // Group agents by grid cell and compute local tech level (mean innovation)
+    let mut cell_agents: Vec<Vec<usize>> = vec![Vec::new(); num_cells];
+    let mut cell_tech_sum: Vec<f32> = vec![0.0; num_cells];
+
+    for i in 0..n {
+        let cx = (pop.xs[i] / cell_size).floor() as usize;
+        let cy = (pop.ys[i] / cell_size).floor() as usize;
+        let key = cy.min(rows - 1) * cols + cx.min(cols - 1);
+        cell_agents[key].push(i);
+        cell_tech_sum[key] += pop.innovations[i];
+    }
+
+    let mut summary = EnergyTickSummary::default();
+
+    // Harvest energy per cell and distribute to agents
+    for k in 0..num_cells {
+        let agent_count = cell_agents[k].len();
+        if agent_count == 0 {
+            continue;
+        }
+
+        let tech = cell_tech_sum[k] / agent_count as f32;
+        let agents_f = agent_count as f64;
+        let cell = &mut landscape.cells[k];
+        let mut cell_net_energy = 0.0_f64;
+
+        for (type_idx, source) in cell.sources.iter_mut().enumerate() {
+            if tech < source.tech_threshold || source.flow_rate <= 0.0 {
+                continue;
+            }
+
+            let eroei = source.current_eroei();
+            if eroei <= 1.0 {
+                continue; // uneconomical to extract
+            }
+
+            // Gross harvest: per-agent rate * number of agents * scaling
+            let gross_max = source.flow_rate * agents_f * ep.harvest_per_agent;
+            let gross = if source.stock.is_finite() {
+                gross_max.min(source.stock)
+            } else {
+                gross_max
+            };
+
+            // Net energy after extraction costs
+            let net = gross * (1.0 - 1.0 / eroei);
+            cell_net_energy += net;
+            summary.energy_by_type[type_idx] += net;
+
+            // Deplete finite stocks
+            if source.stock.is_finite() {
+                source.stock = (source.stock - gross).max(0.0);
+            }
+        }
+
+        // Distribute net energy among agents in this cell
+        let per_agent = (cell_net_energy / agents_f) as f32;
+        for &agent_idx in &cell_agents[k] {
+            pop.resources[agent_idx] += per_agent;
+            summary.agents_harvesting += 1;
+        }
+        summary.total_net_energy += cell_net_energy;
+    }
+
+    // Biomass regeneration: slowly recover stock in all cells
+    for cell in &mut landscape.cells {
+        let src = &mut cell.sources[EnergyType::Biomass as usize];
+        if src.stock < src.initial_stock {
+            src.stock = (src.stock + ep.biomass_regen_rate).min(src.initial_stock);
+        }
+    }
+
+    summary
+}
+
+// ---------------------------------------------------------------------------
 // Main simulation loop
 // ---------------------------------------------------------------------------
 
@@ -1300,6 +1703,7 @@ fn movement_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig) {
 #[must_use]
 pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
     let mut pop = seed_population(&cfg);
+    let mut landscape = init_energy_landscape(&cfg);
     let mut next_id = cfg.initial_population as u64;
     let mut snapshots = Vec::with_capacity(cfg.ticks as usize);
 
@@ -1318,6 +1722,9 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
         let total_interactions = effects.total_interactions;
         apply_effects(&mut pop, &effects, &cfg);
 
+        // Energy harvest (replaces flat resource_regen)
+        let energy_summary = energy_harvest_tick(&mut pop, &mut landscape, &cfg);
+
         // Lifecycle: aging, death, reproduction
         lifecycle_tick(&mut pop, tick, &cfg, &mut next_id);
 
@@ -1325,14 +1732,21 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
         movement_tick(&mut pop, tick, &cfg);
 
         // Measure emergent state
-        let emergent =
-            measure_emergent_state(&pop, coop_events, conflict_events, total_interactions);
+        let emergent = measure_emergent_state(
+            &pop,
+            coop_events,
+            conflict_events,
+            total_interactions,
+            &energy_summary,
+            &landscape,
+        );
         snapshots.push(AgentSnapshot { tick, emergent });
     }
 
     AgentSimResult {
         snapshots,
         final_population: pop,
+        final_landscape: landscape,
     }
 }
 
@@ -1500,7 +1914,10 @@ mod tests {
         let result = simulate_agents(AgentSimConfig {
             initial_population: 200,
             ticks: 100,
-            resource_regen: 0.20,
+            energy: EnergyParams {
+                biomass_flow_rate: 0.25,
+                ..EnergyParams::default()
+            },
             world_size: 50.0,
             max_population: 2000,
             min_population: 2,
@@ -1524,7 +1941,10 @@ mod tests {
         let result = simulate_agents(AgentSimConfig {
             initial_population: 80,
             ticks: 200,
-            resource_regen: 0.005,
+            energy: EnergyParams {
+                biomass_flow_rate: 0.006,
+                ..EnergyParams::default()
+            },
             world_size: 50.0,
             ..AgentSimConfig::default()
         });
@@ -1550,5 +1970,190 @@ mod tests {
             assert!((0.0..=1.0).contains(&e.conflict_rate));
             assert!(e.mean_health >= 0.0 && e.mean_health <= 1.0);
         }
+    }
+
+    // --- Energy model tests ---
+
+    #[test]
+    fn energy_source_depletion_tracks_stock() {
+        let src = EnergySource {
+            stock: 50.0,
+            initial_stock: 100.0,
+            flow_rate: 1.0,
+            base_eroei: 10.0,
+            tech_threshold: 0.0,
+            steepness: 2.0,
+        };
+        assert!((src.depletion() - 0.5).abs() < 1e-9);
+        assert!(src.current_eroei() < src.base_eroei);
+        // At 50% depletion with steepness 2: eroei = 10 * 0.5^2 = 2.5
+        assert!((src.current_eroei() - 2.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn energy_source_infinite_stock_has_zero_depletion() {
+        let src = EnergySource {
+            stock: f64::INFINITY,
+            initial_stock: f64::INFINITY,
+            flow_rate: 1.0,
+            base_eroei: 15.0,
+            tech_threshold: 0.0,
+            steepness: 1.0,
+        };
+        assert!((src.depletion() - 0.0).abs() < 1e-9);
+        assert!((src.current_eroei() - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn energy_landscape_initialized_with_correct_dimensions() {
+        let cfg = AgentSimConfig {
+            world_size: 40.0,
+            interaction_radius: 8.0,
+            ..AgentSimConfig::default()
+        };
+        let landscape = init_energy_landscape(&cfg);
+        let expected_cols = (40.0_f32 / 8.0).ceil() as usize + 1;
+        assert_eq!(landscape.cols, expected_cols);
+        assert_eq!(landscape.rows, expected_cols);
+        assert_eq!(landscape.cells.len(), expected_cols * expected_cols);
+    }
+
+    #[test]
+    fn biomass_provides_resources_without_tech() {
+        // Even with zero innovation, biomass should be harvestable
+        let cfg = AgentSimConfig {
+            initial_population: 50,
+            ticks: 10,
+            ..AgentSimConfig::default()
+        };
+        let result = simulate_agents(cfg);
+        // Agents should have some resources from biomass
+        let mean_res = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_resources)
+            .unwrap_or(0.0);
+        assert!(mean_res > 0.0, "agents should have resources from biomass");
+    }
+
+    #[test]
+    fn energy_per_capita_is_positive() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 50,
+            ticks: 10,
+            ..AgentSimConfig::default()
+        });
+        let epc = result.snapshots[5].emergent.energy_per_capita;
+        assert!(epc > 0.0, "energy per capita should be positive, got {epc}");
+    }
+
+    #[test]
+    fn fossil_depletion_increases_with_extraction() {
+        // High innovation to unlock fossil, small world to concentrate agents
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 200,
+            world_size: 20.0,
+            lifecycle: LifecycleParams {
+                innovation_growth_rate: 0.01, // fast tech growth
+                ..LifecycleParams::default()
+            },
+            energy: EnergyParams {
+                fossil_tech_threshold: 0.1, // low threshold for testing
+                fossil_abundance: 1.0,      // every cell has fossil
+                fossil_initial_stock: 50.0, // small stock to see depletion
+                ..EnergyParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let fossil_dep = result.final_landscape.mean_depletion(EnergyType::Fossil);
+        assert!(
+            fossil_dep > 0.0,
+            "fossil should show depletion after extraction, got {fossil_dep}"
+        );
+    }
+
+    #[test]
+    fn agriculture_unlocks_at_tech_threshold() {
+        // Run with innovation growth. Agriculture should eventually contribute.
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 300,
+            world_size: 30.0,
+            lifecycle: LifecycleParams {
+                innovation_growth_rate: 0.005,
+                ..LifecycleParams::default()
+            },
+            energy: EnergyParams {
+                agriculture_tech_threshold: 0.2,
+                agriculture_fertility_prob: 1.0, // all cells fertile
+                ..EnergyParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        // By tick 300, innovation should be ~0.15 + 300*0.005 = 1.65 (clamped to 1.0)
+        // Agriculture should be the dominant energy source
+        // By tick 300, innovation should have grown past the threshold
+        let last_innov = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_innovation)
+            .unwrap_or(0.0);
+        assert!(
+            last_innov > 0.2,
+            "innovation should have grown past ag threshold, got {last_innov}"
+        );
+    }
+
+    #[test]
+    fn innovation_grows_over_time() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 50,
+            ticks: 100,
+            ..AgentSimConfig::default()
+        });
+        let early_innov = result.snapshots[5].emergent.mean_innovation;
+        let late_innov = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_innovation)
+            .unwrap_or(0.0);
+        assert!(
+            late_innov > early_innov,
+            "innovation should grow: early={early_innov:.4} late={late_innov:.4}"
+        );
+    }
+
+    #[test]
+    fn biomass_only_society_plateaus() {
+        // With no tech growth, only biomass available -> population should plateau
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 100,
+            ticks: 300,
+            world_size: 40.0,
+            max_population: 5000,
+            lifecycle: LifecycleParams {
+                innovation_growth_rate: 0.0, // no tech progress
+                ..LifecycleParams::default()
+            },
+            energy: EnergyParams {
+                agriculture_tech_threshold: 10.0, // unreachable
+                fossil_tech_threshold: 10.0,
+                renewable_tech_threshold: 10.0,
+                ..EnergyParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let peak = result
+            .snapshots
+            .iter()
+            .map(|s| s.emergent.population_size)
+            .max()
+            .unwrap_or(0);
+        // Biomass-only should support limited population
+        assert!(
+            peak < 2000,
+            "biomass-only society should plateau, peak was {peak}"
+        );
     }
 }

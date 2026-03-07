@@ -1,8 +1,8 @@
 use std::env;
 
 use walrus_engine::agents::{
-    simulate_agents, AgentSimConfig, InteractionParams, LifecycleParams, MateSelectionParams,
-    MovementParams,
+    simulate_agents, AgentSimConfig, EnergyParams, InteractionParams, LifecycleParams,
+    MateSelectionParams, MovementParams,
 };
 
 fn env_f32(key: &str, default: f32) -> f32 {
@@ -46,6 +46,7 @@ fn build_config() -> AgentSimConfig {
     let dl = d.lifecycle;
     let dm = d.movement;
     let dms = d.mate_selection;
+    let de = d.energy;
 
     AgentSimConfig {
         seed: env_u64("SEED", d.seed),
@@ -53,7 +54,30 @@ fn build_config() -> AgentSimConfig {
         ticks: env_u32("TICKS", d.ticks),
         world_size: env_f32("WORLD_SIZE", d.world_size),
         interaction_radius: env_f32("INTERACTION_RADIUS", d.interaction_radius),
-        resource_regen: env_f32("RESOURCE_REGEN", d.resource_regen),
+        energy: EnergyParams {
+            biomass_base_eroei: env_f64("BIOMASS_BASE_EROEI", de.biomass_base_eroei),
+            biomass_initial_stock: env_f64("BIOMASS_INITIAL_STOCK", de.biomass_initial_stock),
+            biomass_flow_rate: env_f64("BIOMASS_FLOW_RATE", de.biomass_flow_rate),
+            biomass_steepness: env_f64("BIOMASS_STEEPNESS", de.biomass_steepness),
+            biomass_tech_threshold: env_f32("BIOMASS_TECH_THRESHOLD", de.biomass_tech_threshold),
+            biomass_regen_rate: env_f64("BIOMASS_REGEN_RATE", de.biomass_regen_rate),
+            agriculture_base_eroei: env_f64("AG_BASE_EROEI", de.agriculture_base_eroei),
+            agriculture_initial_stock: env_f64("AG_INITIAL_STOCK", de.agriculture_initial_stock),
+            agriculture_flow_rate: env_f64("AG_FLOW_RATE", de.agriculture_flow_rate),
+            agriculture_steepness: env_f64("AG_STEEPNESS", de.agriculture_steepness),
+            agriculture_tech_threshold: env_f32("AG_TECH_THRESHOLD", de.agriculture_tech_threshold),
+            agriculture_fertility_prob: env_f64("AG_FERTILITY_PROB", de.agriculture_fertility_prob),
+            fossil_base_eroei: env_f64("FOSSIL_BASE_EROEI", de.fossil_base_eroei),
+            fossil_initial_stock: env_f64("FOSSIL_INITIAL_STOCK", de.fossil_initial_stock),
+            fossil_flow_rate: env_f64("FOSSIL_FLOW_RATE", de.fossil_flow_rate),
+            fossil_steepness: env_f64("FOSSIL_STEEPNESS", de.fossil_steepness),
+            fossil_tech_threshold: env_f32("FOSSIL_TECH_THRESHOLD", de.fossil_tech_threshold),
+            fossil_abundance: env_f64("FOSSIL_ABUNDANCE", de.fossil_abundance),
+            renewable_base_eroei: env_f64("RENEW_BASE_EROEI", de.renewable_base_eroei),
+            renewable_flow_rate: env_f64("RENEW_FLOW_RATE", de.renewable_flow_rate),
+            renewable_tech_threshold: env_f32("RENEW_TECH_THRESHOLD", de.renewable_tech_threshold),
+            harvest_per_agent: env_f64("HARVEST_PER_AGENT", de.harvest_per_agent),
+        },
         max_age: env_u16("MAX_AGE", d.max_age),
         min_population: env_u32("MIN_POP", d.min_population),
         max_population: env_u32("MAX_POP", d.max_population),
@@ -148,6 +172,7 @@ fn build_config() -> AgentSimConfig {
             newborn_resources: env_f32("NEWBORN_RESOURCES", dl.newborn_resources),
             birth_spawn_radius: env_f32("BIRTH_SPAWN_RADIUS", dl.birth_spawn_radius),
             agents_per_kin_group: env_u32("AGENTS_PER_KIN_GROUP", dl.agents_per_kin_group),
+            innovation_growth_rate: env_f32("INNOVATION_GROWTH_RATE", dl.innovation_growth_rate),
         },
         movement: MovementParams {
             kin_pull_strength: env_f32("KIN_PULL_STRENGTH", dm.kin_pull_strength),
@@ -163,33 +188,50 @@ fn build_config() -> AgentSimConfig {
     }
 }
 
+fn energy_type_name(code: u8) -> &'static str {
+    match code {
+        0 => "biomass",
+        1 => "agriculture",
+        2 => "fossil",
+        3 => "renewable",
+        _ => "unknown",
+    }
+}
+
 fn main() {
     let cfg = build_config();
 
-    eprintln!("Agent Simulation");
+    eprintln!("Agent Simulation (Phase 2: Energy Model)");
     eprintln!(
-        "  pop={} ticks={} world={} radius={} regen={} max_age={}",
-        cfg.initial_population,
-        cfg.ticks,
-        cfg.world_size,
-        cfg.interaction_radius,
-        cfg.resource_regen,
-        cfg.max_age
+        "  pop={} ticks={} world={} radius={}",
+        cfg.initial_population, cfg.ticks, cfg.world_size, cfg.interaction_radius
     );
     eprintln!(
-        "  birth_rate={} conflict_lose_health={} health_recovery_rate={}",
-        cfg.lifecycle.birth_rate,
-        cfg.interaction.conflict_lose_health,
-        cfg.lifecycle.health_recovery_rate
+        "  energy: biomass_eroei={} ag_eroei={} fossil_eroei={} renew_eroei={}",
+        cfg.energy.biomass_base_eroei,
+        cfg.energy.agriculture_base_eroei,
+        cfg.energy.fossil_base_eroei,
+        cfg.energy.renewable_base_eroei
+    );
+    eprintln!(
+        "  tech thresholds: biomass={} ag={} fossil={} renew={}",
+        cfg.energy.biomass_tech_threshold,
+        cfg.energy.agriculture_tech_threshold,
+        cfg.energy.fossil_tech_threshold,
+        cfg.energy.renewable_tech_threshold
+    );
+    eprintln!(
+        "  innovation_growth_rate={}",
+        cfg.lifecycle.innovation_growth_rate
     );
 
     let result = simulate_agents(cfg);
 
-    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health");
+    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion");
     for snap in &result.snapshots {
         let e = &snap.emergent;
         println!(
-            "{},{},{},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4}",
+            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4}",
             snap.tick,
             e.population_size,
             e.mean_resources,
@@ -203,10 +245,32 @@ fn main() {
             e.conflict_rate,
             e.mean_prestige,
             e.mean_health,
+            e.mean_innovation,
+            energy_type_name(e.dominant_energy),
+            e.energy_per_capita,
+            e.mean_eroei,
+            e.biomass_depletion,
+            e.fossil_depletion,
         );
     }
 
     let ticks_run = result.snapshots.len();
     let final_pop = result.final_population.len();
-    eprintln!("{ticks_run} ticks completed, final pop = {final_pop}");
+    let final_innov = result
+        .snapshots
+        .last()
+        .map(|s| s.emergent.mean_innovation)
+        .unwrap_or(0.0);
+    eprintln!(
+        "{ticks_run} ticks completed, final pop = {final_pop}, final innovation = {final_innov:.4}"
+    );
+    eprintln!(
+        "  biomass depletion: {:.4}, fossil depletion: {:.4}",
+        result
+            .final_landscape
+            .mean_depletion(walrus_engine::agents::EnergyType::Biomass),
+        result
+            .final_landscape
+            .mean_depletion(walrus_engine::agents::EnergyType::Fossil),
+    );
 }
