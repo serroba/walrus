@@ -6,12 +6,13 @@ Ship a minimal agent-based simulator demonstrating macro emergence from micro ru
 
 ## Scope
 
-1. 3-4 agent classes.
-2. 2 resource stocks (one renewable, one non-renewable).
-3. 1 governance module with adaptive policy.
-4. 1 stress channel (resource -> price -> legitimacy).
-5. Group-size and subsistence-regime transitions (hunter-gatherer -> sedentary -> agriculture).
-6. Multi-society world: many local societies with local emergence metrics before global aggregation.
+1. ~~3-4 agent classes.~~ **Done.** Three functional roles (Producer/Coordinator/Trader) with role-based interaction modifiers.
+2. ~~2 resource stocks (one renewable, one non-renewable).~~ **Done.** `WorldState` with `renewable_stock` and `nonrenewable_stock`.
+3. ~~1 governance module with adaptive policy.~~ **Done.** `GovernanceState` with three policy types (Laissez/Redistributive/Extractive) and adaptive selection via `adapt_governance`.
+4. ~~1 stress channel (resource -> price -> legitimacy).~~ **Done.** `StressChannel` with explicit `price_pressure` and `legitimacy` fields, EMA-smoothed scarcity signal, and legitimacy erosion/recovery dynamics.
+5. ~~Group-size and subsistence-regime transitions (hunter-gatherer -> sedentary -> agriculture).~~ **Done.** `next_subsistence_mode` with hysteresis.
+6. ~~Multi-society world: many local societies with local emergence metrics before global aggregation.~~ **Done.** `LocalSocietyState` + `aggregate_from_local_societies`.
+7. **Oxytocin model** (bonus): continuous 3D affinity vectors on each agent, driving in-group bonding and out-group othering with emergent tribal clustering. See `04_agent-architecture.md`.
 
 ## Deliverables
 
