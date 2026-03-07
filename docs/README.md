@@ -21,3 +21,4 @@ Start with [`foundations/01_scope-and-goals.md`](./foundations/01_scope-and-goal
 For emergence-first work, also use [`foundations/06_emergence-rules-and-feedbacks.md`](./foundations/06_emergence-rules-and-feedbacks.md).
 For macro stock-flow constraints, use [`foundations/07_pyworld3-integration-notes.md`](./foundations/07_pyworld3-integration-notes.md).
 For non-technical communication, use [`foundations/08_visualization-guidelines.md`](./foundations/08_visualization-guidelines.md).
+For generated example visuals, use [`visual-exploration.md`](./visual-exploration.md).

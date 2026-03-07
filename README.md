@@ -59,6 +59,14 @@ This writes a self-contained interactive dashboard:
 
 - `outputs/latest/app/index.html`
 
+## Exploration Snapshots
+
+Generated from real scenario outputs (`make viz-report` + `node scripts/generate_snapshots.mjs`):
+
+![Baseline snapshot](docs/assets/snapshot_baseline_default.svg)
+![Ecological stress snapshot](docs/assets/snapshot_eco-stress_fragile.svg)
+![Fragmented low coupling snapshot](docs/assets/snapshot_fragmented-low-coupling_default.svg)
+
 ## System Feedback Loop
 
 ```bash
