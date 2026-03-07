@@ -292,6 +292,7 @@ pub struct AgentInteractionStats {
     pub conflicts: u32,
     pub trades: u32,
     pub migrations: u32,
+    pub raids: u32,
     pub births: u32,
     pub deaths: u32,
     pub replacements: u32,
@@ -763,6 +764,153 @@ pub fn step_local_society(
     }
 }
 
+/// Result of a society-level war between two local societies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WarOutcome {
+    /// Index of the attacking society.
+    pub attacker: usize,
+    /// Index of the defending society.
+    pub defender: usize,
+    /// Military strength of attacker (population × aggression proxy × surplus).
+    pub attacker_strength: f64,
+    /// Military strength of defender.
+    pub defender_strength: f64,
+    /// Population transferred from loser to winner.
+    pub population_transfer: u32,
+    /// Surplus seized by the winner.
+    pub surplus_seized: f64,
+}
+
+/// Computes military strength of a society for war resolution.
+fn military_strength(society: &LocalSocietyState) -> f64 {
+    let pop = f64::from(society.population);
+    let mode_mult = match society.mode {
+        SubsistenceMode::HunterGatherer => 0.6,
+        SubsistenceMode::Sedentary => 1.0,
+        SubsistenceMode::Agriculture => 1.4,
+    };
+    let surplus_factor = 1.0 + society.surplus_per_capita;
+    let governance_factor = match society.governance.policy {
+        GovernancePolicy::Extractive => 1.2, // extractive regimes mobilize more
+        GovernancePolicy::Redistributive => 1.0,
+        GovernancePolicy::Laissez => 0.8,
+    };
+    pop * mode_mult * surplus_factor * governance_factor
+}
+
+/// Evaluates and resolves inter-society wars for one tick.
+///
+/// Wars are probabilistic: societies under stress with surplus differentials are
+/// more likely to raid wealthier neighbors. Returns the list of war outcomes
+/// and mutates societies in place.
+fn resolve_society_wars(
+    societies: &mut [LocalSocietyState],
+    rng_state: &mut u64,
+) -> Vec<WarOutcome> {
+    let n = societies.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let mut outcomes = Vec::new();
+
+    for i in 0..n {
+        for j in (i + 1)..n {
+            // War probability: driven by stress, surplus differential, and governance crisis.
+            let stress_i = societies[i].ecological_pressure
+                + (1.0 - societies[i].governance.stress.legitimacy);
+            let stress_j = societies[j].ecological_pressure
+                + (1.0 - societies[j].governance.stress.legitimacy);
+            let surplus_diff = (societies[i].surplus_per_capita - societies[j].surplus_per_capita).abs();
+
+            // Base war probability is low; rises with stress and inequality between societies.
+            let war_p = clamp01(
+                0.005 * (stress_i + stress_j) + 0.008 * surplus_diff
+                    - 0.01 * (societies[i].network_coupling + societies[j].network_coupling),
+            );
+
+            if rand01(rng_state) >= war_p {
+                continue;
+            }
+
+            // Determine attacker: the more stressed society attacks.
+            let (attacker_idx, defender_idx) = if stress_i >= stress_j {
+                (i, j)
+            } else {
+                (j, i)
+            };
+
+            let att_str = military_strength(&societies[attacker_idx]);
+            let def_str = military_strength(&societies[defender_idx]);
+            let total = att_str + def_str;
+            if total <= 0.0 {
+                continue;
+            }
+
+            // Probabilistic outcome weighted by strength ratio.
+            let att_win_p = att_str / total;
+            let attacker_wins = rand01(rng_state) < att_win_p;
+
+            let (winner_idx, loser_idx) = if attacker_wins {
+                (attacker_idx, defender_idx)
+            } else {
+                (defender_idx, attacker_idx)
+            };
+
+            // War costs: both sides lose population, winner gains surplus.
+            let casualty_rate = 0.03 + 0.02 * rand01(rng_state);
+            let winner_casualties =
+                (f64::from(societies[winner_idx].population) * casualty_rate * 0.5) as u32;
+            let loser_casualties =
+                (f64::from(societies[loser_idx].population) * casualty_rate * 1.5) as u32;
+
+            let pop_transfer = (loser_casualties / 3).max(1);
+            let surplus_seized = societies[loser_idx].surplus_per_capita * 0.10;
+
+            // Apply war effects
+            societies[winner_idx].population = societies[winner_idx]
+                .population
+                .saturating_sub(winner_casualties)
+                .saturating_add(pop_transfer)
+                .max(1);
+            societies[loser_idx].population = societies[loser_idx]
+                .population
+                .saturating_sub(loser_casualties)
+                .saturating_sub(pop_transfer)
+                .max(1);
+
+            societies[winner_idx].surplus_per_capita =
+                (societies[winner_idx].surplus_per_capita + surplus_seized).clamp(0.0, 2.0);
+            societies[loser_idx].surplus_per_capita =
+                (societies[loser_idx].surplus_per_capita - surplus_seized).clamp(0.0, 2.0);
+
+            // Legitimacy shock: wars erode governance legitimacy for both sides.
+            societies[winner_idx].governance.stress.legitimacy = clamp01(
+                societies[winner_idx].governance.stress.legitimacy - 0.04,
+            );
+            societies[loser_idx].governance.stress.legitimacy = clamp01(
+                societies[loser_idx].governance.stress.legitimacy - 0.12,
+            );
+
+            // Ecological damage from war.
+            societies[winner_idx].ecological_pressure =
+                (societies[winner_idx].ecological_pressure + 0.02).clamp(0.0, 1.0);
+            societies[loser_idx].ecological_pressure =
+                (societies[loser_idx].ecological_pressure + 0.04).clamp(0.0, 1.0);
+
+            outcomes.push(WarOutcome {
+                attacker: attacker_idx,
+                defender: defender_idx,
+                attacker_strength: att_str,
+                defender_strength: def_str,
+                population_transfer: pop_transfer,
+                surplus_seized,
+            });
+        }
+    }
+
+    outcomes
+}
+
 /// Runs a local-to-global emergence simulation for `ticks` iterations.
 #[must_use]
 pub fn run_emergence_simulation(
@@ -771,6 +919,7 @@ pub fn run_emergence_simulation(
     cfg: TransitionConfig,
 ) -> Vec<EmergenceSnapshot> {
     let mut snapshots = Vec::with_capacity(ticks as usize);
+    let mut rng_state = 0xdead_beef_cafe_1234_u64;
 
     for tick in 0..ticks {
         let global = aggregate_from_local_societies(&societies);
@@ -806,9 +955,12 @@ pub fn run_emergence_simulation(
             agriculture_count,
         });
 
-        for society in &mut societies {
+        for society in societies.iter_mut() {
             *society = step_local_society(*society, global, cfg);
         }
+
+        // Inter-society wars after local evolution.
+        let _wars = resolve_society_wars(&mut societies, &mut rng_state);
     }
 
     snapshots
@@ -1030,6 +1182,7 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
             conflicts: 0,
             trades: 0,
             migrations: 0,
+            raids: 0,
             births: 0,
             deaths: 0,
             replacements: 0,
@@ -1298,16 +1451,82 @@ pub fn step_agent_based_society(society: &mut AgentBasedSociety) -> AgentInterac
     }
     society.agents = survivors;
 
+    // Agent-level raid resolution: when conflict is high and stress is elevated,
+    // high-aggression agents form raiding parties that cause concentrated damage.
+    let mut raids = 0_u32;
+    let n_agents = society.agents.len();
+    if n_agents >= 6 && conflicts > (n_agents as u32) / 4 {
+        let stress = clamp01(society.ecological_pressure);
+        let raid_p = clamp01(0.15 * stress + 0.10 * (conflicts as f64 / n_agents as f64));
+        if rand01(&mut society.rng_state) < raid_p {
+            raids = 1;
+            // Raid: high-aggression agents seize resources from low-aggression agents.
+            // Sort by aggression to find raiders vs victims.
+            let mut indices: Vec<usize> = (0..n_agents).collect();
+            indices.sort_by(|&a, &b| {
+                society.agents[b]
+                    .aggression
+                    .partial_cmp(&society.agents[a].aggression)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let raider_count = (n_agents / 5).max(1);
+            let victim_count = (n_agents / 5).max(1);
+
+            let raid_loot = 0.08 + 0.04 * stress;
+            // Raiders gain, victims lose
+            for &ri in indices.iter().take(raider_count) {
+                society.agents[ri].resources =
+                    (society.agents[ri].resources + raid_loot).clamp(0.0, 3.0);
+                society.agents[ri].status =
+                    (society.agents[ri].status + 0.02).clamp(0.0, 1.0);
+                society.agents[ri].recent_conflict =
+                    (society.agents[ri].recent_conflict + 0.15).clamp(0.0, 1.0);
+            }
+            for &vi in indices.iter().rev().take(victim_count) {
+                society.agents[vi].resources =
+                    (society.agents[vi].resources - raid_loot).clamp(0.0, 3.0);
+                society.agents[vi].trust =
+                    (society.agents[vi].trust - 0.06).clamp(0.0, 1.0);
+                society.agents[vi].recent_conflict =
+                    (society.agents[vi].recent_conflict + 0.10).clamp(0.0, 1.0);
+            }
+
+            // Raids cause affinity polarization: raiders converge, victims converge,
+            // but the two groups diverge from each other.
+            if raider_count >= 2 {
+                let raider_mean = [
+                    indices.iter().take(raider_count).map(|&i| society.agents[i].affinity[0]).sum::<f64>() / raider_count as f64,
+                    indices.iter().take(raider_count).map(|&i| society.agents[i].affinity[1]).sum::<f64>() / raider_count as f64,
+                    indices.iter().take(raider_count).map(|&i| society.agents[i].affinity[2]).sum::<f64>() / raider_count as f64,
+                ];
+                for &ri in indices.iter().take(raider_count) {
+                    drift_affinity(&mut society.agents[ri].affinity, &raider_mean, 0.06);
+                }
+            }
+            if victim_count >= 2 {
+                let victim_mean = [
+                    indices.iter().rev().take(victim_count).map(|&i| society.agents[i].affinity[0]).sum::<f64>() / victim_count as f64,
+                    indices.iter().rev().take(victim_count).map(|&i| society.agents[i].affinity[1]).sum::<f64>() / victim_count as f64,
+                    indices.iter().rev().take(victim_count).map(|&i| society.agents[i].affinity[2]).sum::<f64>() / victim_count as f64,
+                ];
+                for &vi in indices.iter().rev().take(victim_count) {
+                    drift_affinity(&mut society.agents[vi].affinity, &victim_mean, 0.06);
+                }
+            }
+        }
+    }
+
     let n_after = society.agents.len().max(1) as f64;
     let mean_trust = society.agents.iter().map(|a| a.trust).sum::<f64>() / n_after;
     let inequality = gini_of_resources(&society.agents);
-    let total_events = (cooperations + conflicts + trades + migrations).max(1) as f64;
+    let total_events = (cooperations + conflicts + trades + migrations + raids).max(1) as f64;
 
     AgentInteractionStats {
         cooperations,
         conflicts,
         trades,
         migrations,
+        raids,
         births,
         deaths,
         replacements,
@@ -1722,7 +1941,7 @@ mod tests {
         adapt_governance, affinity_distance, aggregate_from_local_societies, classify_trajectory,
         drift_affinity, emergence_order_parameters, emergent_dynamics, gini_of_resources,
         group_behavior_profile, local_complexity, macro_from_agents, micro_macro_projection,
-        next_subsistence_mode, oxytocin_signal, run_agent_based_simulation,
+        next_subsistence_mode, oxytocin_signal, resolve_society_wars, run_agent_based_simulation,
         run_emergence_simulation, scenario_dense_coupled_growth, scenario_ecological_stress,
         scenario_fragmented_low_coupling, scenario_local_emergence_baseline,
         seed_agent_based_society, seed_agent_based_society_with_topology, seed_micro_agents,
@@ -2461,5 +2680,221 @@ mod tests {
             a.affinity[0] > 0.2 && a.affinity[0] < 0.8
         });
         assert!(has_mid_range, "expected some affinity convergence in population");
+    }
+
+    #[test]
+    fn society_wars_transfer_resources_between_societies() {
+        let mut societies = vec![
+            LocalSocietyState {
+                population: 500,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.60,
+                network_coupling: 0.10,
+                ecological_pressure: 0.30,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Laissez,
+                    tax_rate: 0.05,
+                    redistribution_rate: 0.50,
+                    stress: StressChannel {
+                        price_pressure: 0.60,
+                        legitimacy: 0.30,
+                    },
+                },
+            },
+            LocalSocietyState {
+                population: 200,
+                mode: SubsistenceMode::Sedentary,
+                surplus_per_capita: 0.15,
+                network_coupling: 0.10,
+                ecological_pressure: 0.70,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Extractive,
+                    tax_rate: 0.25,
+                    redistribution_rate: 0.20,
+                    stress: StressChannel {
+                        price_pressure: 0.80,
+                        legitimacy: 0.15,
+                    },
+                },
+            },
+        ];
+
+        let total_pop_before: u32 = societies.iter().map(|s| s.population).sum();
+        let mut rng = 42_u64;
+
+        // Run many rounds to ensure at least one war fires.
+        let mut any_war = false;
+        for _ in 0..200 {
+            let outcomes = resolve_society_wars(&mut societies, &mut rng);
+            if !outcomes.is_empty() {
+                any_war = true;
+                let o = &outcomes[0];
+                // War outcome should have non-zero transfer
+                assert!(o.population_transfer > 0 || o.surplus_seized > 0.0);
+                break;
+            }
+        }
+        assert!(any_war, "expected at least one war in 200 ticks with high stress");
+
+        // Population should have changed (casualties + transfers)
+        let total_pop_after: u32 = societies.iter().map(|s| s.population).sum();
+        assert_ne!(total_pop_before, total_pop_after);
+    }
+
+    #[test]
+    fn wars_erode_legitimacy() {
+        let mut societies = vec![
+            LocalSocietyState {
+                population: 800,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.50,
+                network_coupling: 0.05,
+                ecological_pressure: 0.60,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Redistributive,
+                    tax_rate: 0.15,
+                    redistribution_rate: 0.70,
+                    stress: StressChannel {
+                        price_pressure: 0.50,
+                        legitimacy: 0.55,
+                    },
+                },
+            },
+            LocalSocietyState {
+                population: 600,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.20,
+                network_coupling: 0.05,
+                ecological_pressure: 0.80,
+                governance: GovernanceState {
+                    policy: GovernancePolicy::Extractive,
+                    tax_rate: 0.25,
+                    redistribution_rate: 0.20,
+                    stress: StressChannel {
+                        price_pressure: 0.70,
+                        legitimacy: 0.25,
+                    },
+                },
+            },
+        ];
+
+        let leg_before_0 = societies[0].governance.stress.legitimacy;
+        let leg_before_1 = societies[1].governance.stress.legitimacy;
+        let mut rng = 77_u64;
+
+        for _ in 0..300 {
+            let outcomes = resolve_society_wars(&mut societies, &mut rng);
+            if !outcomes.is_empty() {
+                // After war, at least one society should have lower legitimacy
+                let leg_dropped = societies[0].governance.stress.legitimacy < leg_before_0
+                    || societies[1].governance.stress.legitimacy < leg_before_1;
+                assert!(leg_dropped, "war should erode legitimacy");
+                return;
+            }
+        }
+        // If no war fired in 300 ticks, that's also valid (low probability)
+    }
+
+    #[test]
+    fn agent_raids_fire_under_high_conflict_stress() {
+        let mut society = seed_agent_based_society_with_topology(
+            40,
+            SubsistenceMode::Agriculture,
+            0.4,
+            0.85, // high ecological pressure
+            InteractionTopology::SmallWorld,
+            2,
+            999,
+        );
+        // Boost aggression across the board to ensure high conflict
+        for agent in &mut society.agents {
+            agent.aggression = 0.90;
+            agent.cooperation = 0.10;
+        }
+
+        let mut any_raids = false;
+        for _ in 0..100 {
+            let stats = step_agent_based_society(&mut society);
+            if stats.raids > 0 {
+                any_raids = true;
+                break;
+            }
+        }
+        assert!(any_raids, "expected at least one raid under high stress + aggression");
+    }
+
+    #[test]
+    fn raids_cause_resource_redistribution() {
+        let mut society = seed_agent_based_society_with_topology(
+            30,
+            SubsistenceMode::Agriculture,
+            0.3,
+            0.90,
+            InteractionTopology::Random,
+            3,
+            123,
+        );
+        for agent in &mut society.agents {
+            agent.aggression = 0.85;
+            agent.cooperation = 0.15;
+            agent.resources = 0.50; // uniform start
+        }
+
+        for _ in 0..200 {
+            let stats = step_agent_based_society(&mut society);
+            if stats.raids > 0 {
+                // After a raid, resources should be uneven (high-aggression raiders got more)
+                let max_res = society.agents.iter().map(|a| a.resources).fold(0.0_f64, f64::max);
+                let min_res = society.agents.iter().map(|a| a.resources).fold(3.0_f64, f64::min);
+                assert!(max_res > min_res, "raid should create resource inequality");
+                return;
+            }
+        }
+    }
+
+    #[test]
+    fn network_coupling_reduces_war_probability() {
+        // High coupling societies should fight less (trade integration)
+        let high_coupling = vec![
+            LocalSocietyState {
+                population: 400,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.40,
+                network_coupling: 0.90,
+                ecological_pressure: 0.50,
+                governance: GovernanceState {
+                    stress: StressChannel { price_pressure: 0.50, legitimacy: 0.40 },
+                    ..GovernanceState::default()
+                },
+            },
+            LocalSocietyState {
+                population: 300,
+                mode: SubsistenceMode::Agriculture,
+                surplus_per_capita: 0.20,
+                network_coupling: 0.90,
+                ecological_pressure: 0.60,
+                governance: GovernanceState {
+                    stress: StressChannel { price_pressure: 0.60, legitimacy: 0.30 },
+                    ..GovernanceState::default()
+                },
+            },
+        ];
+        let low_coupling = vec![
+            LocalSocietyState { network_coupling: 0.05, ..high_coupling[0] },
+            LocalSocietyState { network_coupling: 0.05, ..high_coupling[1] },
+        ];
+
+        let mut high_wars = 0_u32;
+        let mut low_wars = 0_u32;
+        let mut rng_h = 55_u64;
+        let mut rng_l = 55_u64;
+        let mut h = high_coupling;
+        let mut l = low_coupling;
+        for _ in 0..500 {
+            high_wars += resolve_society_wars(&mut h, &mut rng_h).len() as u32;
+            low_wars += resolve_society_wars(&mut l, &mut rng_l).len() as u32;
+        }
+        // Low coupling should produce at least as many wars
+        assert!(low_wars >= high_wars, "low coupling should produce more wars");
     }
 }

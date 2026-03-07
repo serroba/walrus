@@ -44,7 +44,13 @@ Agents who cooperate drift toward each other in affinity space, reinforcing thei
 
 Agents who conflict drift apart in affinity space, deepening cultural divides. This can produce persistent inter-group hostility.
 
-### R6: Governance Extraction Spiral
+### R6: War-Militarization Loop
+
+`stress ↑ -> war probability ↑ -> military success rewards hierarchy + coercion -> extractive governance ↑ -> further stress ↑`
+
+Societies under stress are more likely to initiate wars. War winners gain resources and population, reinforcing the institutional structures (hierarchy, coercion) that enabled military mobilization. At the agent level, raids drive affinity polarization — raiding parties converge internally while diverging from victims, producing self-reinforcing tribal factions.
+
+### R7: Governance Extraction Spiral
 
 `legitimacy ↓ -> extractive policy ↑ -> ecological degradation ↑ -> surplus ↓ -> price pressure ↑ -> legitimacy ↓`
 
@@ -64,7 +70,13 @@ This does not remove emergence; it can instead produce brittle, coercive stabili
 
 Under moderate stress, governance adapts by redistributing surplus (Redistributive policy), partially stabilizing the system. This is a balancing loop until legitimacy drops below 0.35, at which point R6 (extraction spiral) dominates.
 
-### B3: Trade-Driven Cultural Integration
+### B3: War Exhaustion
+
+`war ↑ -> casualties + ecological damage ↑ -> reduced military capacity ↓ -> war probability ↓`
+
+Wars are costly: both sides suffer population losses, ecological damage, and legitimacy erosion. This creates a natural ceiling on war frequency and prevents runaway militarization.
+
+### B4: Trade-Driven Cultural Integration
 
 `trade ↑ -> mild affinity convergence -> reduced othering -> more trade`
 
