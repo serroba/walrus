@@ -56,6 +56,41 @@ pub struct LocalComplexity {
     pub complexity_index: f64,
 }
 
+/// Thresholds for regime transitions with simple hysteresis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TransitionConfig {
+    pub sedentarism_population_threshold: u32,
+    pub sedentarism_surplus_threshold: f64,
+    pub agriculture_population_threshold: u32,
+    pub agriculture_surplus_threshold: f64,
+    pub regression_ecological_pressure_threshold: f64,
+    pub regression_surplus_threshold: f64,
+}
+
+impl Default for TransitionConfig {
+    fn default() -> Self {
+        Self {
+            sedentarism_population_threshold: 120,
+            sedentarism_surplus_threshold: 0.25,
+            agriculture_population_threshold: 800,
+            agriculture_surplus_threshold: 0.45,
+            regression_ecological_pressure_threshold: 0.85,
+            regression_surplus_threshold: 0.20,
+        }
+    }
+}
+
+/// Snapshot of emergence state at one simulation tick.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EmergenceSnapshot {
+    pub tick: u64,
+    pub global: EmergenceOrderParameters,
+    pub mean_local_complexity: f64,
+    pub hunter_gatherer_count: usize,
+    pub sedentary_count: usize,
+    pub agriculture_count: usize,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -346,6 +381,171 @@ pub fn aggregate_from_local_societies(societies: &[LocalSocietyState]) -> Emerge
     }
 }
 
+/// Determines next subsistence mode based on scale, surplus, and ecological stress.
+#[must_use]
+pub fn next_subsistence_mode(
+    current_mode: SubsistenceMode,
+    population: u32,
+    surplus_per_capita: f64,
+    ecological_pressure: f64,
+    cfg: TransitionConfig,
+) -> SubsistenceMode {
+    let pop = population;
+    let surplus = surplus_per_capita.max(0.0);
+    let eco = clamp01(ecological_pressure);
+
+    match current_mode {
+        SubsistenceMode::HunterGatherer => {
+            if pop >= cfg.sedentarism_population_threshold
+                && surplus >= cfg.sedentarism_surplus_threshold
+            {
+                SubsistenceMode::Sedentary
+            } else {
+                SubsistenceMode::HunterGatherer
+            }
+        }
+        SubsistenceMode::Sedentary => {
+            if pop >= cfg.agriculture_population_threshold
+                && surplus >= cfg.agriculture_surplus_threshold
+            {
+                SubsistenceMode::Agriculture
+            } else if eco >= cfg.regression_ecological_pressure_threshold
+                && surplus < cfg.regression_surplus_threshold * 0.6
+            {
+                SubsistenceMode::HunterGatherer
+            } else {
+                SubsistenceMode::Sedentary
+            }
+        }
+        SubsistenceMode::Agriculture => {
+            if eco >= cfg.regression_ecological_pressure_threshold
+                && surplus < cfg.regression_surplus_threshold
+            {
+                SubsistenceMode::Sedentary
+            } else {
+                SubsistenceMode::Agriculture
+            }
+        }
+    }
+}
+
+/// One deterministic time step for a local society with global feedback signals.
+#[must_use]
+pub fn step_local_society(
+    state: LocalSocietyState,
+    global: EmergenceOrderParameters,
+    cfg: TransitionConfig,
+) -> LocalSocietyState {
+    let mode_growth = match state.mode {
+        SubsistenceMode::HunterGatherer => 0.003,
+        SubsistenceMode::Sedentary => 0.008,
+        SubsistenceMode::Agriculture => 0.012,
+    };
+    let growth_feedback = 0.004 * global.throughput_pressure * clamp01(state.network_coupling);
+    let ecological_penalty = 0.02 * clamp01(state.ecological_pressure);
+    let growth_rate = mode_growth + growth_feedback - ecological_penalty;
+    let grown_pop = f64::from(state.population) * (1.0 + growth_rate);
+    let next_population = grown_pop.max(1.0).round() as u32;
+
+    let productivity_bonus = match state.mode {
+        SubsistenceMode::HunterGatherer => 0.02,
+        SubsistenceMode::Sedentary => 0.05,
+        SubsistenceMode::Agriculture => 0.08,
+    };
+    let next_surplus = (state.surplus_per_capita
+        + productivity_bonus
+        + 0.10 * global.throughput_pressure * clamp01(state.network_coupling)
+        - 0.16 * clamp01(state.ecological_pressure))
+    .clamp(0.0, 2.0);
+
+    let mode_coupling_bonus = match state.mode {
+        SubsistenceMode::HunterGatherer => -0.01,
+        SubsistenceMode::Sedentary => 0.0,
+        SubsistenceMode::Agriculture => 0.01,
+    };
+    let next_coupling =
+        (state.network_coupling + mode_coupling_bonus + 0.06 * global.coordination_centralization
+            - 0.03 * clamp01(state.ecological_pressure))
+        .clamp(0.0, 1.0);
+
+    let restoration_factor = match state.mode {
+        SubsistenceMode::HunterGatherer => 0.06,
+        SubsistenceMode::Sedentary => 0.03,
+        SubsistenceMode::Agriculture => 0.01,
+    };
+    let next_ecological_pressure =
+        (state.ecological_pressure + 0.05 * global.throughput_pressure + 0.04 * next_surplus
+            - restoration_factor)
+            .clamp(0.0, 1.0);
+
+    let next_mode = next_subsistence_mode(
+        state.mode,
+        next_population,
+        next_surplus,
+        next_ecological_pressure,
+        cfg,
+    );
+
+    LocalSocietyState {
+        population: next_population,
+        mode: next_mode,
+        surplus_per_capita: next_surplus,
+        network_coupling: next_coupling,
+        ecological_pressure: next_ecological_pressure,
+    }
+}
+
+/// Runs a local-to-global emergence simulation for `ticks` iterations.
+#[must_use]
+pub fn run_emergence_simulation(
+    mut societies: Vec<LocalSocietyState>,
+    ticks: u64,
+    cfg: TransitionConfig,
+) -> Vec<EmergenceSnapshot> {
+    let mut snapshots = Vec::with_capacity(ticks as usize);
+
+    for tick in 0..ticks {
+        let global = aggregate_from_local_societies(&societies);
+        let mean_local_complexity = if societies.is_empty() {
+            0.0
+        } else {
+            let sum: f64 = societies
+                .iter()
+                .map(|s| local_complexity(*s).complexity_index)
+                .sum();
+            sum / (societies.len() as f64)
+        };
+
+        let hunter_gatherer_count = societies
+            .iter()
+            .filter(|s| s.mode == SubsistenceMode::HunterGatherer)
+            .count();
+        let sedentary_count = societies
+            .iter()
+            .filter(|s| s.mode == SubsistenceMode::Sedentary)
+            .count();
+        let agriculture_count = societies
+            .iter()
+            .filter(|s| s.mode == SubsistenceMode::Agriculture)
+            .count();
+
+        snapshots.push(EmergenceSnapshot {
+            tick,
+            global,
+            mean_local_complexity,
+            hunter_gatherer_count,
+            sedentary_count,
+            agriculture_count,
+        });
+
+        for society in &mut societies {
+            *society = step_local_society(*society, global, cfg);
+        }
+    }
+
+    snapshots
+}
+
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
@@ -354,8 +554,9 @@ fn clamp01(value: f64) -> f64 {
 mod tests {
     use super::{
         aggregate_from_local_societies, emergence_order_parameters, emergent_dynamics,
-        group_behavior_profile, local_complexity, AgentState, LocalSocietyState, SimulationConfig,
-        SimulationEngine, SubsistenceMode, WorldState,
+        group_behavior_profile, local_complexity, next_subsistence_mode, run_emergence_simulation,
+        step_local_society, AgentState, EmergenceOrderParameters, LocalSocietyState,
+        SimulationConfig, SimulationEngine, SubsistenceMode, TransitionConfig, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -519,5 +720,93 @@ mod tests {
         let mixed = aggregate_from_local_societies(&[small_local, large_complex]);
         let only_small = aggregate_from_local_societies(&[small_local]);
         assert!(mixed.superorganism_index > only_small.superorganism_index);
+    }
+
+    #[test]
+    fn transitions_to_sedentary_when_thresholds_are_met() {
+        let cfg = TransitionConfig::default();
+        let next = next_subsistence_mode(SubsistenceMode::HunterGatherer, 200, 0.4, 0.2, cfg);
+        assert_eq!(next, SubsistenceMode::Sedentary);
+    }
+
+    #[test]
+    fn agricultural_regresses_under_high_ecological_stress() {
+        let cfg = TransitionConfig::default();
+        let next = next_subsistence_mode(SubsistenceMode::Agriculture, 2_000, 0.1, 0.95, cfg);
+        assert_eq!(next, SubsistenceMode::Sedentary);
+    }
+
+    #[test]
+    fn step_local_society_is_deterministic() {
+        let cfg = TransitionConfig::default();
+        let input = LocalSocietyState {
+            population: 300,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.3,
+            network_coupling: 0.4,
+            ecological_pressure: 0.2,
+        };
+        let global = EmergenceOrderParameters {
+            throughput_pressure: 0.5,
+            coordination_centralization: 0.5,
+            policy_lock_in: 0.4,
+            autonomy_loss: 0.3,
+            superorganism_index: 0.45,
+        };
+
+        let a = step_local_society(input, global, cfg);
+        let b = step_local_society(input, global, cfg);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn run_emergence_simulation_shows_local_to_global_shift() {
+        let cfg = TransitionConfig::default();
+        let initial = vec![
+            LocalSocietyState {
+                population: 150,
+                mode: SubsistenceMode::HunterGatherer,
+                surplus_per_capita: 0.3,
+                network_coupling: 0.3,
+                ecological_pressure: 0.1,
+            },
+            LocalSocietyState {
+                population: 180,
+                mode: SubsistenceMode::HunterGatherer,
+                surplus_per_capita: 0.35,
+                network_coupling: 0.35,
+                ecological_pressure: 0.15,
+            },
+            LocalSocietyState {
+                population: 220,
+                mode: SubsistenceMode::Sedentary,
+                surplus_per_capita: 0.4,
+                network_coupling: 0.4,
+                ecological_pressure: 0.2,
+            },
+        ];
+
+        let snapshots = run_emergence_simulation(initial, 60, cfg);
+        assert!(!snapshots.is_empty());
+        let first = snapshots[0];
+        let last = snapshots[snapshots.len() - 1];
+        let peak_complexity = snapshots
+            .iter()
+            .map(|s| s.mean_local_complexity)
+            .fold(0.0, f64::max);
+        let peak_superorganism = snapshots
+            .iter()
+            .map(|s| s.global.superorganism_index)
+            .fold(0.0, f64::max);
+        let peak_complex_societies = snapshots
+            .iter()
+            .map(|s| s.sedentary_count + s.agriculture_count)
+            .max()
+            .unwrap_or(0);
+
+        assert!(peak_complexity >= first.mean_local_complexity);
+        assert!(peak_superorganism >= first.global.superorganism_index);
+        assert!(last.global.superorganism_index >= 0.2);
+        assert!(peak_complex_societies >= first.sedentary_count);
     }
 }
