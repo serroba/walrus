@@ -49,6 +49,16 @@ This writes:
 - `outputs/latest/report.md` (plain-language scenario summary)
 - `outputs/latest/timeline_*.csv` (time-series data for plotting)
 
+## Generate Standalone Viewer
+
+```bash
+make viz-app
+```
+
+This writes a self-contained interactive dashboard:
+
+- `outputs/latest/app/index.html`
+
 ## System Feedback Loop
 
 ```bash
