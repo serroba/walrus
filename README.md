@@ -12,8 +12,6 @@ Open-source simulation framework to test explicit assumptions about energy, mate
 ## Quick Start
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+uv sync --all-extras
 make check
 ```
