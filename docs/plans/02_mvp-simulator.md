@@ -18,6 +18,7 @@ Ship a minimal agent-based simulator demonstrating macro emergence from micro ru
 2. Baseline scenario and three counterfactuals.
 3. Core dashboards (CLI plots + exported notebook template).
 4. Calibration stubs with documented priors.
+5. Emergence telemetry: throughput pressure, centralization, policy lock-in, autonomy loss, superorganism index.
 
 ## Acceptance Criteria
 

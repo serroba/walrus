@@ -26,6 +26,16 @@ pub struct EmergentDynamics {
     pub institutional_centralization: f64,
 }
 
+/// Macro-level order parameters used to detect superorganism emergence.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EmergenceOrderParameters {
+    pub throughput_pressure: f64,
+    pub coordination_centralization: f64,
+    pub policy_lock_in: f64,
+    pub autonomy_loss: f64,
+    pub superorganism_index: f64,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -185,6 +195,63 @@ pub fn emergent_dynamics(
     }
 }
 
+/// Computes macro emergence signals from micro/meso state proxies.
+///
+/// `network_coupling` and `ecological_pressure` are normalized to `[0, 1]`.
+#[must_use]
+pub fn emergence_order_parameters(
+    group_size: u32,
+    mode: SubsistenceMode,
+    surplus_per_capita: f64,
+    network_coupling: f64,
+    ecological_pressure: f64,
+) -> EmergenceOrderParameters {
+    let behavior = group_behavior_profile(group_size, mode);
+    let dynamics = emergent_dynamics(group_size, mode, surplus_per_capita);
+    let coupling = clamp01(network_coupling);
+    let eco_pressure = clamp01(ecological_pressure);
+
+    // R1: surplus/storage -> centralization -> throughput pressure.
+    let throughput_pressure = clamp01(
+        0.35 * dynamics.storage_dependence + 0.35 * dynamics.property_lock_in + 0.30 * coupling,
+    );
+
+    // R2: scale/coordination cost -> hierarchy delegation -> centralization.
+    let coordination_centralization = clamp01(
+        0.25 * behavior.coordination_cost / 10.0
+            + 0.40 * behavior.hierarchy_pressure / 10.0
+            + 0.35 * dynamics.institutional_centralization,
+    );
+
+    // R3: centralization + property lock-in -> policy lock-in.
+    let policy_lock_in = clamp01(
+        0.50 * dynamics.property_lock_in + 0.35 * coordination_centralization + 0.15 * coupling,
+    );
+
+    // Autonomy loss rises with lock-in and coercion; cohesion partially offsets it.
+    let autonomy_loss = clamp01(
+        0.45 * policy_lock_in
+            + 0.35 * behavior.coercion_propensity
+            + 0.20 * coordination_centralization
+            - 0.20 * behavior.cohesion,
+    );
+
+    // Balancing loop: ecological pressure constrains aggregate superorganism coherence.
+    let raw_index = 0.30 * throughput_pressure
+        + 0.30 * coordination_centralization
+        + 0.20 * policy_lock_in
+        + 0.20 * autonomy_loss;
+    let superorganism_index = clamp01(raw_index * (1.0 - 0.35 * eco_pressure));
+
+    EmergenceOrderParameters {
+        throughput_pressure,
+        coordination_centralization,
+        policy_lock_in,
+        autonomy_loss,
+        superorganism_index,
+    }
+}
+
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
@@ -192,8 +259,8 @@ fn clamp01(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        emergent_dynamics, group_behavior_profile, AgentState, SimulationConfig, SimulationEngine,
-        SubsistenceMode, WorldState,
+        emergence_order_parameters, emergent_dynamics, group_behavior_profile, AgentState,
+        SimulationConfig, SimulationEngine, SubsistenceMode, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -297,5 +364,23 @@ mod tests {
         assert!(agricultural.labor_specialization > sedentary.labor_specialization);
         assert!(agricultural.property_lock_in > sedentary.property_lock_in);
         assert!(agricultural.institutional_centralization > sedentary.institutional_centralization);
+    }
+
+    #[test]
+    fn superorganism_signal_increases_with_group_size_and_mode() {
+        let small_hg =
+            emergence_order_parameters(30, SubsistenceMode::HunterGatherer, 0.1, 0.2, 0.1);
+        let large_ag =
+            emergence_order_parameters(3_000, SubsistenceMode::Agriculture, 0.5, 0.8, 0.1);
+        assert!(large_ag.superorganism_index > small_hg.superorganism_index);
+    }
+
+    #[test]
+    fn ecological_pressure_is_a_balancing_loop() {
+        let low_pressure =
+            emergence_order_parameters(1_000, SubsistenceMode::Agriculture, 0.5, 0.8, 0.1);
+        let high_pressure =
+            emergence_order_parameters(1_000, SubsistenceMode::Agriculture, 0.5, 0.8, 0.9);
+        assert!(high_pressure.superorganism_index < low_pressure.superorganism_index);
     }
 }
