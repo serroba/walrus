@@ -136,6 +136,10 @@ that roll up into macro emergence metrics.
 It also includes a society-level actor model with per-generation messages,
 geography constraints, and evolutionary adaptation.
 
+Coordination-failure and AI-risk framing is documented in:
+
+- `docs/foundations/12_moloch-ai-coordination-framework.md`
+
 Usage guidance is documented in:
 
 - `docs/foundations/09_agent-actor-simulation.md`
