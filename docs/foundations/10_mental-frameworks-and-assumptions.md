@@ -19,6 +19,7 @@ The objective is to test classes of behavior:
 2. **Jared Diamond-style geography constraints:**
 - complexity growth depends on geography and biophysical opportunity, not culture alone.
 - model variables: domesticable biomass, diffusion access, energy endowment, carrying capacity.
+- topology controls: abstract layouts (`connected`, `regional`, `islands`) and `isolation_factor`.
 - interpretation: continents with higher energy/access should show earlier complexity emergence.
 
 3. **Tainter-style diminishing returns to complexity:**
@@ -46,8 +47,9 @@ The objective is to test classes of behavior:
 1. Local surplus and complexity are coupled but not monotonic.
 2. Collapse can be local, partial, and reversible.
 3. Migration/trade corridors can diffuse complexity and shocks.
-4. Different geographies produce different timing and depth of complexity transitions.
-5. Uncertainty is intrinsic: we report ensembles and confidence labels.
+4. Isolation constraints change whether adaptation converges globally or diverges locally.
+5. Different geographies produce different timing and depth of complexity transitions.
+6. Uncertainty is intrinsic: we report ensembles and confidence labels.
 
 ## What We Do Not Claim
 

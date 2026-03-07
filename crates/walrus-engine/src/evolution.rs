@@ -62,9 +62,22 @@ pub struct WorldMap {
     pub corridors: Vec<Corridor>,
 }
 
+/// Abstract continental layout used to test isolation and diffusion regimes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContinentalLayout {
+    Connected,
+    Regional,
+    Islands,
+}
+
 impl WorldMap {
     #[must_use]
     pub fn default_world() -> Self {
+        Self::from_layout(ContinentalLayout::Regional, 0.35)
+    }
+
+    #[must_use]
+    pub fn from_layout(layout: ContinentalLayout, isolation_factor: f64) -> Self {
         let continents = vec![
             Continent {
                 name: "Africa".to_string(),
@@ -110,33 +123,81 @@ impl WorldMap {
                 depletion: 0.0,
             })
             .collect::<Vec<ContinentState>>();
-        let corridors = vec![
-            Corridor {
-                from: 0,
-                to: 1,
-                strength: 0.40,
-            },
-            Corridor {
-                from: 1,
-                to: 0,
-                strength: 0.40,
-            },
-            Corridor {
-                from: 1,
-                to: 2,
-                strength: 0.28,
-            },
-            Corridor {
-                from: 2,
-                to: 1,
-                strength: 0.28,
-            },
-            Corridor {
-                from: 2,
-                to: 3,
-                strength: 0.12,
-            },
-        ];
+        let base_corridors = match layout {
+            ContinentalLayout::Connected => {
+                let mut links = Vec::new();
+                for from in 0..continents.len() {
+                    for to in 0..continents.len() {
+                        if from != to {
+                            links.push(Corridor {
+                                from,
+                                to,
+                                strength: 0.36,
+                            });
+                        }
+                    }
+                }
+                links
+            }
+            ContinentalLayout::Regional => vec![
+                Corridor {
+                    from: 0,
+                    to: 1,
+                    strength: 0.40,
+                },
+                Corridor {
+                    from: 1,
+                    to: 0,
+                    strength: 0.40,
+                },
+                Corridor {
+                    from: 1,
+                    to: 2,
+                    strength: 0.28,
+                },
+                Corridor {
+                    from: 2,
+                    to: 1,
+                    strength: 0.28,
+                },
+                Corridor {
+                    from: 2,
+                    to: 3,
+                    strength: 0.12,
+                },
+            ],
+            ContinentalLayout::Islands => vec![
+                Corridor {
+                    from: 0,
+                    to: 1,
+                    strength: 0.10,
+                },
+                Corridor {
+                    from: 1,
+                    to: 0,
+                    strength: 0.10,
+                },
+                Corridor {
+                    from: 2,
+                    to: 3,
+                    strength: 0.08,
+                },
+                Corridor {
+                    from: 3,
+                    to: 2,
+                    strength: 0.08,
+                },
+            ],
+        };
+        let isolation = isolation_factor.clamp(0.0, 1.0);
+        let corridor_scale = (1.0 - isolation).clamp(0.0, 1.0);
+        let corridors = base_corridors
+            .into_iter()
+            .map(|corridor| Corridor {
+                strength: corridor.strength * corridor_scale,
+                ..corridor
+            })
+            .collect::<Vec<Corridor>>();
 
         Self {
             continents,
@@ -230,6 +291,9 @@ pub struct EvolutionConfig {
     pub initial_societies: u32,
     pub nk_n: usize,
     pub nk_k: usize,
+    pub layout: ContinentalLayout,
+    /// 0 = open diffusion, 1 = fully isolated corridors.
+    pub isolation_factor: f64,
 }
 
 impl Default for EvolutionConfig {
@@ -240,6 +304,8 @@ impl Default for EvolutionConfig {
             initial_societies: 16,
             nk_n: 14,
             nk_k: 3,
+            layout: ContinentalLayout::Regional,
+            isolation_factor: 0.35,
         }
     }
 }
@@ -253,6 +319,8 @@ pub struct EvolutionSnapshot {
     pub mean_energy_access: f64,
     pub collapse_events: u32,
     pub emergent_civilizations: u32,
+    pub convergence_index: f64,
+    pub adaptation_divergence: f64,
 }
 
 /// Final outcome summary per continent.
@@ -276,7 +344,7 @@ pub struct EvolutionResult {
 #[must_use]
 pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
     let mut rng = config.seed.max(1);
-    let mut map = WorldMap::default_world();
+    let mut map = WorldMap::from_layout(config.layout, config.isolation_factor);
     let landscape = NkLandscape::deterministic(config.nk_n, config.nk_k, config.seed ^ 0xa5a5);
     let mut societies = seed_societies(config.initial_societies, &map, &mut rng, config.nk_n);
     let mut snapshots = Vec::with_capacity(config.generations as usize);
@@ -419,6 +487,12 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
             .iter()
             .filter(|s| s.population >= 150 && s.complexity > 0.65)
             .count() as u32;
+        let continent_complexity_means =
+            continent_means(&societies, map.continents.len(), |s| s.complexity);
+        let continent_resilience_means =
+            continent_means(&societies, map.continents.len(), |s| s.resilience);
+        let convergence_index = convergence_index(&continent_complexity_means);
+        let adaptation_divergence = standard_deviation(&continent_resilience_means);
 
         snapshots.push(EvolutionSnapshot {
             generation,
@@ -427,6 +501,8 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
             mean_energy_access,
             collapse_events,
             emergent_civilizations,
+            convergence_index,
+            adaptation_divergence,
         });
     }
 
@@ -458,6 +534,49 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
         continent_outcomes,
         final_societies: societies,
     }
+}
+
+fn standard_deviation(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mean = values.iter().sum::<f64>() / (values.len() as f64);
+    let var = values
+        .iter()
+        .map(|v| {
+            let d = *v - mean;
+            d * d
+        })
+        .sum::<f64>()
+        / (values.len() as f64);
+    var.sqrt()
+}
+
+fn convergence_index(values: &[f64]) -> f64 {
+    let spread = standard_deviation(values);
+    (1.0 / (1.0 + 4.0 * spread)).clamp(0.0, 1.0)
+}
+
+fn continent_means(
+    societies: &[SocietyActor],
+    continent_count: usize,
+    getter: fn(&SocietyActor) -> f64,
+) -> Vec<f64> {
+    let mut sums = vec![0.0; continent_count];
+    let mut counts = vec![0_usize; continent_count];
+    for society in societies {
+        if society.continent < continent_count {
+            sums[society.continent] += getter(society);
+            counts[society.continent] = counts[society.continent].saturating_add(1);
+        }
+    }
+    let mut means = Vec::new();
+    for idx in 0..continent_count {
+        if counts[idx] > 0 {
+            means.push(sums[idx] / (counts[idx] as f64));
+        }
+    }
+    means
 }
 
 fn actor_messages_for(continent_idx: usize, map: &WorldMap, rng: &mut u64) -> Vec<ActorMessage> {
@@ -607,7 +726,8 @@ fn rand01(state: &mut u64) -> f64 {
 mod tests {
     use super::{
         apply_actor_messages, dunbar_group_scale, simulate_evolution, ActorMessage,
-        EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor, WorldMap,
+        ContinentalLayout, EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor,
+        WorldMap,
     };
     use crate::SubsistenceMode;
 
@@ -638,6 +758,15 @@ mod tests {
     }
 
     #[test]
+    fn isolation_factor_reduces_total_corridor_strength() {
+        let open = WorldMap::from_layout(ContinentalLayout::Regional, 0.0);
+        let isolated = WorldMap::from_layout(ContinentalLayout::Regional, 0.9);
+        let open_strength = open.corridors.iter().map(|c| c.strength).sum::<f64>();
+        let isolated_strength = isolated.corridors.iter().map(|c| c.strength).sum::<f64>();
+        assert!(isolated_strength < open_strength);
+    }
+
+    #[test]
     fn evolution_run_shows_both_emergence_and_collapse_events() {
         let result = simulate_evolution(EvolutionConfig {
             seed: 99,
@@ -645,6 +774,8 @@ mod tests {
             initial_societies: 18,
             nk_n: 12,
             nk_k: 3,
+            layout: ContinentalLayout::Regional,
+            isolation_factor: 0.35,
         });
 
         assert!(!result.snapshots.is_empty());
@@ -661,6 +792,7 @@ mod tests {
 
         assert!(peak_complexity > 0.20);
         assert!(collapse_sum > 0);
+        assert!(result.snapshots[0].convergence_index >= 0.0);
     }
 
     #[test]

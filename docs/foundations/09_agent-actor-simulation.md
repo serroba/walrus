@@ -96,3 +96,6 @@ Use the terminal UI to watch agent interactions directly:
    - continent-local state, population, complexity, surplus, trust, resilience,
    - mutable NK genome,
    - message-driven updates (`ClimateShock`, `ResourcePulse`, `MigrationLink`).
+5. `WorldMap` (abstract geography layer):
+   - configurable continental layouts (`Connected`, `Regional`, `Islands`),
+   - tunable `isolation_factor` to test diffusion/isolation constraints.

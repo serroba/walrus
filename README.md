@@ -85,6 +85,18 @@ This runs multi-generation actor evolution with:
 - continent-level energy/resource constraints,
 - local emergence and collapse cycles.
 
+## Run Isolation Sweep
+
+```bash
+make evolution-sweep
+```
+
+This compares abstract continent layouts and isolation levels to study:
+
+- convergent evolution (shared adaptation trajectories),
+- divergence/adaptation to local realities,
+- collapse frequency under constrained diffusion.
+
 ## Exploration Snapshots
 
 Generated from real scenario outputs (`make viz-report` + `node scripts/generate_snapshots.mjs`):
