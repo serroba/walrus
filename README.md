@@ -32,6 +32,12 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only
 cargo run -p walrus-engine --example emergence_run
 ```
 
+## Run Scenario Sweep
+
+```bash
+cargo run -p walrus-engine --example sweep_scenarios
+```
+
 ## System Feedback Loop
 
 ```bash

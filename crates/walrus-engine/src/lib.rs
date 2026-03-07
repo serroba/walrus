@@ -103,6 +103,14 @@ pub struct EmergenceSummary {
     pub peak_complex_societies: usize,
 }
 
+/// Named simulation result for parameter-sweep workflows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NamedSummary {
+    pub name: String,
+    pub summary: EmergenceSummary,
+    pub final_snapshot: EmergenceSnapshot,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -597,6 +605,38 @@ pub fn summarize_emergence(snapshots: &[EmergenceSnapshot]) -> EmergenceSummary 
         end_mean_complexity: last.mean_local_complexity,
         peak_mean_complexity,
         peak_complex_societies,
+    }
+}
+
+/// Runs one named scenario and returns summary plus final state.
+#[must_use]
+pub fn run_named_scenario(
+    name: &str,
+    societies: Vec<LocalSocietyState>,
+    ticks: u64,
+    cfg: TransitionConfig,
+) -> NamedSummary {
+    let snapshots = run_emergence_simulation(societies, ticks, cfg);
+    let summary = summarize_emergence(&snapshots);
+    let final_snapshot = snapshots.last().copied().unwrap_or(EmergenceSnapshot {
+        tick: 0,
+        global: EmergenceOrderParameters {
+            throughput_pressure: 0.0,
+            coordination_centralization: 0.0,
+            policy_lock_in: 0.0,
+            autonomy_loss: 0.0,
+            superorganism_index: 0.0,
+        },
+        mean_local_complexity: 0.0,
+        hunter_gatherer_count: 0,
+        sedentary_count: 0,
+        agriculture_count: 0,
+    });
+
+    NamedSummary {
+        name: name.to_string(),
+        summary,
+        final_snapshot,
     }
 }
 
