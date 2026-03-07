@@ -30,6 +30,31 @@ Agent `i` chooses action `a_i,t` maximizing bounded utility:
 
 subject to budget, energy availability, and institutional constraints.
 
+## Group Size and Regime Functions
+
+Define:
+
+- `N_t`: effective group size (band, settlement, polity, networked civilization).
+- `M_t`: subsistence mode in `{HunterGatherer, Sedentary, Agriculture}`.
+
+Behavioral coefficients are regime-conditioned functions of scale:
+
+`theta_b,t = H(N_t, M_t, phi)`
+
+where `phi` are baseline human traits.
+
+Example mappings:
+
+- coordination cost: `k_coord = alpha_M * log(1 + N_t)`
+- hierarchy pressure: `k_hier = beta_M * log(1 + N_t)`
+- coercion propensity: `k_coerce = gamma_M * max(0, N_t - N0_M) / N_t`
+- norm cohesion: `k_cohesion = delta_M / (1 + eta_M * N_t)`
+
+Expected ordering by mode for equal `N_t`:
+
+- `k_hier(Agriculture) > k_hier(Sedentary) > k_hier(HunterGatherer)`
+- `k_coerce(Agriculture) > k_coerce(Sedentary) > k_coerce(HunterGatherer)`
+
 ## Biophysical Constraints
 
 - Throughput limited by extraction + regeneration rates.
@@ -51,6 +76,10 @@ Define macro “superorganism intensity” index `SO_t` from:
 - resilience fragility tradeoff.
 
 `SO_t = g(throughput_t, centralization_t, lockin_t, fragility_t)`
+
+Add group-size/regime component:
+
+`SO_t = g(..., N_t, M_t, k_hier,t, k_coerce,t)`
 
 ## Validation Framing
 

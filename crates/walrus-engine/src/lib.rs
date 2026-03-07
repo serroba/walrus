@@ -1,5 +1,22 @@
 //! Deterministic, explicit stock-flow simulator core.
 
+/// Historical subsistence regimes used for scenario transitions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubsistenceMode {
+    HunterGatherer,
+    Sedentary,
+    Agriculture,
+}
+
+/// Aggregated social behavior profile induced by group size and regime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BehaviorProfile {
+    pub coordination_cost: f64,
+    pub hierarchy_pressure: f64,
+    pub coercion_propensity: f64,
+    pub cohesion: f64,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -9,6 +26,10 @@ pub struct AgentState {
     pub need: f64,
     /// Relative weight for status-seeking behavior.
     pub status_drive: f64,
+    /// Current local social group size.
+    pub group_size: u32,
+    /// Current subsistence regime.
+    pub subsistence_mode: SubsistenceMode,
 }
 
 /// Global world state updated every simulation tick.
@@ -96,9 +117,37 @@ impl SimulationEngine {
     }
 }
 
+/// Computes regime-conditioned social behavior for a group of size `group_size`.
+#[must_use]
+pub fn group_behavior_profile(group_size: u32, mode: SubsistenceMode) -> BehaviorProfile {
+    let n = f64::from(group_size.max(1));
+    let log_n = (1.0 + n).ln();
+
+    let (alpha, beta, gamma, delta, eta, n0) = match mode {
+        SubsistenceMode::HunterGatherer => (0.8, 0.5, 0.2, 1.2, 0.004, 80.0),
+        SubsistenceMode::Sedentary => (1.0, 0.8, 0.45, 1.0, 0.006, 120.0),
+        SubsistenceMode::Agriculture => (1.2, 1.1, 0.8, 0.85, 0.008, 150.0),
+    };
+
+    let coordination_cost = alpha * log_n;
+    let hierarchy_pressure = beta * log_n;
+    let coercion_propensity = gamma * ((n - n0).max(0.0) / n);
+    let cohesion = delta / (1.0 + eta * n);
+
+    BehaviorProfile {
+        coordination_cost,
+        hierarchy_pressure,
+        coercion_propensity,
+        cohesion,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{AgentState, SimulationConfig, SimulationEngine, WorldState};
+    use super::{
+        group_behavior_profile, AgentState, SimulationConfig, SimulationEngine, SubsistenceMode,
+        WorldState,
+    };
 
     fn build_engine(seed: u64) -> SimulationEngine {
         SimulationEngine::new(
@@ -112,6 +161,8 @@ mod tests {
                     wealth: 1.0,
                     need: 1.0,
                     status_drive: 0.5,
+                    group_size: 50,
+                    subsistence_mode: SubsistenceMode::HunterGatherer,
                 };
                 5
             ],
@@ -129,8 +180,16 @@ mod tests {
         let mut lhs = build_engine(7);
         let mut rhs = build_engine(7);
 
-        let lhs_values: Vec<f64> = lhs.run(10).into_iter().map(|s| s.aggregate_output).collect();
-        let rhs_values: Vec<f64> = rhs.run(10).into_iter().map(|s| s.aggregate_output).collect();
+        let lhs_values: Vec<f64> = lhs
+            .run(10)
+            .into_iter()
+            .map(|s| s.aggregate_output)
+            .collect();
+        let rhs_values: Vec<f64> = rhs
+            .run(10)
+            .into_iter()
+            .map(|s| s.aggregate_output)
+            .collect();
 
         assert_eq!(lhs_values, rhs_values);
     }
@@ -149,5 +208,21 @@ mod tests {
         let mut engine = build_engine(1);
         let history = engine.run(12);
         assert_eq!(history.len(), 12);
+    }
+
+    #[test]
+    fn hierarchy_pressure_increases_with_group_size() {
+        let small = group_behavior_profile(30, SubsistenceMode::Sedentary);
+        let large = group_behavior_profile(3_000, SubsistenceMode::Sedentary);
+        assert!(large.hierarchy_pressure > small.hierarchy_pressure);
+    }
+
+    #[test]
+    fn agriculture_has_higher_hierarchy_than_hunter_gatherer_at_same_size() {
+        let n = 500;
+        let hg = group_behavior_profile(n, SubsistenceMode::HunterGatherer);
+        let ag = group_behavior_profile(n, SubsistenceMode::Agriculture);
+        assert!(ag.hierarchy_pressure > hg.hierarchy_pressure);
+        assert!(ag.coercion_propensity > hg.coercion_propensity);
     }
 }

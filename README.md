@@ -1,6 +1,7 @@
 # Walrus Simulator
 
 Open-source simulation framework to test explicit assumptions about energy, materials, institutions, and emergent superorganism dynamics.
+Current modeling objective: capture how behavior shifts with group size and historical transitions from hunter-gatherer to sedentary to agricultural societies.
 
 ## Tech Direction
 

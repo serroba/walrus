@@ -3,6 +3,7 @@
 ## Working Definition
 
 The superorganism is emergent system-level behavior where distributed agents collectively optimize short-term throughput growth, often at long-term resilience cost.
+In this project, superorganism emergence is explicitly conditioned by group-size scaling and historical subsistence transitions.
 
 ## Hypothesized Mechanisms
 
@@ -10,6 +11,8 @@ The superorganism is emergent system-level behavior where distributed agents col
 2. Competition selects for growth-maximizing organizations.
 3. States stabilize growth via debt, infrastructure, and coercive order.
 4. Network effects synchronize behavior across regions/sectors.
+5. Group-size growth drives a shift from relational coordination to formal hierarchy.
+6. Sedentism and agriculture increase storage/surplus, enabling larger institutions and persistent inequality.
 
 ## Observable Signatures
 
@@ -17,6 +20,8 @@ The superorganism is emergent system-level behavior where distributed agents col
 - Increasing dependence on fragile long supply chains.
 - Policy preference for stability now over resilience later.
 - Public narratives lagging biophysical constraints.
+- Group-size-dependent increases in hierarchy and coercive governance.
+- Regime transition fingerprints: mobility decline, surplus storage rise, centralization rise.
 
 ## Experimental Design
 

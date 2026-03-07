@@ -14,6 +14,7 @@
 - Preferences: status vs security vs cooperation.
 - Beliefs: trust in institutions, risk perception, ideology.
 - Constraints: geography, access, policy, network position.
+- Group context: current group size, social density, and subsistence mode.
 
 ## Behavioral Engines (Pluggable)
 
@@ -28,6 +29,17 @@ Phase 1 uses rule-based + simple bounded utility.
 - Local social graph.
 - Market graph (buyers/sellers/credit).
 - Governance graph (jurisdictions).
+
+## Group-Level State
+
+Each group carries:
+
+- population size,
+- subsistence mode (`HunterGatherer`, `Sedentary`, `Agriculture`),
+- mobility level,
+- institutional centralization,
+- coercion capacity,
+- ecological pressure.
 
 ## Time Step Pipeline
 
