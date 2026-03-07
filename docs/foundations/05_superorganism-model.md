@@ -22,6 +22,7 @@ In this project, superorganism emergence is explicitly conditioned by group-size
 - Public narratives lagging biophysical constraints.
 - Group-size-dependent increases in hierarchy and coercive governance.
 - Regime transition fingerprints: mobility decline, surplus storage rise, centralization rise.
+- Sedentarism fingerprints: storage dependence, property lock-in, labor specialization, and formalized institutions.
 
 ## Experimental Design
 

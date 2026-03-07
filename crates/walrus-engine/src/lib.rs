@@ -17,6 +17,15 @@ pub struct BehaviorProfile {
     pub cohesion: f64,
 }
 
+/// Emergent social dynamics derived from regime and scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EmergentDynamics {
+    pub storage_dependence: f64,
+    pub labor_specialization: f64,
+    pub property_lock_in: f64,
+    pub institutional_centralization: f64,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -142,11 +151,49 @@ pub fn group_behavior_profile(group_size: u32, mode: SubsistenceMode) -> Behavio
     }
 }
 
+/// Computes expected emergent dynamics from group size, regime, and available surplus.
+///
+/// `surplus_per_capita` is a normalized proxy in `[0, +inf)` where larger values indicate
+/// greater storage and deferred consumption capacity.
+#[must_use]
+pub fn emergent_dynamics(
+    group_size: u32,
+    mode: SubsistenceMode,
+    surplus_per_capita: f64,
+) -> EmergentDynamics {
+    let n = f64::from(group_size.max(1));
+    let log_scale = n.ln_1p();
+    let surplus = surplus_per_capita.max(0.0);
+
+    let (storage_base, specialization_base, property_base, centralization_base) = match mode {
+        SubsistenceMode::HunterGatherer => (0.10, 0.15, 0.10, 0.12),
+        SubsistenceMode::Sedentary => (0.40, 0.45, 0.40, 0.45),
+        SubsistenceMode::Agriculture => (0.65, 0.70, 0.75, 0.70),
+    };
+
+    let storage_dependence = clamp01(storage_base + 0.08 * log_scale + 0.20 * surplus);
+    let labor_specialization = clamp01(specialization_base + 0.10 * log_scale + 0.20 * surplus);
+    let property_lock_in = clamp01(property_base + 0.06 * log_scale + 0.15 * surplus);
+    let institutional_centralization =
+        clamp01(centralization_base + 0.12 * log_scale + 0.10 * surplus);
+
+    EmergentDynamics {
+        storage_dependence,
+        labor_specialization,
+        property_lock_in,
+        institutional_centralization,
+    }
+}
+
+fn clamp01(value: f64) -> f64 {
+    value.clamp(0.0, 1.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        group_behavior_profile, AgentState, SimulationConfig, SimulationEngine, SubsistenceMode,
-        WorldState,
+        emergent_dynamics, group_behavior_profile, AgentState, SimulationConfig, SimulationEngine,
+        SubsistenceMode, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -224,5 +271,31 @@ mod tests {
         let ag = group_behavior_profile(n, SubsistenceMode::Agriculture);
         assert!(ag.hierarchy_pressure > hg.hierarchy_pressure);
         assert!(ag.coercion_propensity > hg.coercion_propensity);
+    }
+
+    #[test]
+    fn sedentarism_increases_storage_and_property_lock_in() {
+        let n = 150;
+        let surplus = 0.5;
+
+        let hunter = emergent_dynamics(n, SubsistenceMode::HunterGatherer, surplus);
+        let sedentary = emergent_dynamics(n, SubsistenceMode::Sedentary, surplus);
+
+        assert!(sedentary.storage_dependence > hunter.storage_dependence);
+        assert!(sedentary.property_lock_in > hunter.property_lock_in);
+        assert!(sedentary.institutional_centralization > hunter.institutional_centralization);
+    }
+
+    #[test]
+    fn agriculture_pushes_further_than_sedentary() {
+        let n = 5;
+        let surplus = 0.1;
+
+        let sedentary = emergent_dynamics(n, SubsistenceMode::Sedentary, surplus);
+        let agricultural = emergent_dynamics(n, SubsistenceMode::Agriculture, surplus);
+
+        assert!(agricultural.labor_specialization > sedentary.labor_specialization);
+        assert!(agricultural.property_lock_in > sedentary.property_lock_in);
+        assert!(agricultural.institutional_centralization > sedentary.institutional_centralization);
     }
 }
