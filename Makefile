@@ -1,4 +1,4 @@
-.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report viz-app tui-life calibration-loop
+.PHONY: fmt lint test coverage coverage-engine coverage-workspace check feedback-loop system-feedback sim-sweep viz-report viz-app tui-life calibration-loop evolution-run
 
 LLVM_COV_BIN := $(shell sh -c 'command -v llvm-cov 2>/dev/null || xcrun --find llvm-cov 2>/dev/null')
 LLVM_PROFDATA_BIN := $(shell sh -c 'command -v llvm-profdata 2>/dev/null || xcrun --find llvm-profdata 2>/dev/null')
@@ -49,3 +49,6 @@ calibration-loop:
 	$(MAKE) check
 	cargo run -q -p walrus-engine --example visualization_report
 	cargo run -q -p walrus-engine --example visualization_app
+
+evolution-run:
+	cargo run -q -p walrus-engine --example evolutionary_map_run

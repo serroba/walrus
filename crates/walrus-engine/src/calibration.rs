@@ -243,9 +243,46 @@ pub fn ingest_maddison_csv(path: &str) -> Result<CanonicalBenchmarks, DataIngest
     )
 }
 
+/// Ingests HANDY-like model exports for macro trend anchoring.
+///
+/// Expected columns:
+/// - `year`
+/// - `population`
+/// - `resources`
+/// - `output_per_capita`
+/// - `inequality`
+pub fn ingest_handy_csv(path: &str) -> Result<CanonicalBenchmarks, DataIngestError> {
+    let base = ingest_csv(
+        path,
+        "year",
+        "population",
+        "inequality",
+        "output_per_capita",
+        "resources",
+    )?;
+
+    let transformed_urban = base
+        .urbanization
+        .values
+        .iter()
+        .map(|v| (1.0 - *v).clamp(0.0, 1.0))
+        .collect::<Vec<f64>>();
+
+    Ok(CanonicalBenchmarks {
+        urbanization: BenchmarkSeries {
+            name: "coordination_proxy".to_string(),
+            years: base.urbanization.years.clone(),
+            values: transformed_urban,
+        },
+        ..base
+    })
+}
+
 pub fn ingest_owid_or_maddison(path: &str) -> Result<CanonicalBenchmarks, DataIngestError> {
     if path.ends_with(".csv") {
-        ingest_owid_csv(path).or_else(|_| ingest_maddison_csv(path))
+        ingest_owid_csv(path)
+            .or_else(|_| ingest_maddison_csv(path))
+            .or_else(|_| ingest_handy_csv(path))
     } else if path.ends_with(".parquet") {
         Err(DataIngestError::UnsupportedFormat(
             "parquet ingestion is not yet compiled in this minimal core; export csv first"
@@ -720,9 +757,9 @@ mod tests {
     use std::fs;
 
     use super::{
-        calibration_confidence, comparison_table, default_parameter_bounds, ingest_maddison_csv,
-        ingest_owid_csv, run_calibration, score, stylized_targets, CalibrationConfidence,
-        CalibrationConfig,
+        calibration_confidence, comparison_table, default_parameter_bounds, ingest_handy_csv,
+        ingest_maddison_csv, ingest_owid_csv, run_calibration, score, stylized_targets,
+        CalibrationConfidence, CalibrationConfig,
     };
 
     fn write_fixture(path: &str, header: &str) {
@@ -763,6 +800,21 @@ mod tests {
             .unwrap_or_else(|e| panic!("maddison schema should parse: {e:?}"));
         assert_eq!(data.gdp_per_capita.years.len(), 6);
         assert_eq!(data.urbanization.values.len(), 6);
+    }
+
+    #[test]
+    fn handy_adapter_parses_expected_schema() {
+        let path = "/tmp/walrus_handy_fixture.csv";
+        write_fixture(
+            path,
+            "year,population,resources,output_per_capita,inequality",
+        );
+
+        let data =
+            ingest_handy_csv(path).unwrap_or_else(|e| panic!("handy schema should parse: {e:?}"));
+        assert_eq!(data.population.years.len(), 6);
+        assert_eq!(data.gdp_per_capita.values.len(), 6);
+        assert_eq!(data.energy.values.len(), 6);
     }
 
     #[test]

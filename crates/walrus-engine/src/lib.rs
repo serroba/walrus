@@ -2,6 +2,7 @@
 
 pub mod calibration;
 pub mod ensemble;
+pub mod evolution;
 
 /// Historical subsistence regimes used for scenario transitions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

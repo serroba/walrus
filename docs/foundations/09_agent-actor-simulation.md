@@ -8,6 +8,12 @@ The model uses agent/actor simulation to make emergence explicit:
 2. Local interactions shift trust, resources, inequality, and memory.
 3. These shifts aggregate into society-level complexity and superorganism dynamics.
 
+The model now includes an explicit actor-message loop in the evolutionary layer:
+
+1. each society actor receives per-generation messages,
+2. actor state is updated locally,
+3. global aggregates are derived from actor states.
+
 ## Actor Levels
 
 1. `MicroAgent`:
@@ -48,6 +54,8 @@ The model uses agent/actor simulation to make emergence explicit:
   - `step_agent_based_society(&mut society)`
 - Run full simulation:
   - `run_agent_based_simulation(society, ticks, transition_cfg)`
+- Run multi-generation actor evolution:
+  - `evolution::simulate_evolution(config)`
 
 ## Practical Workflow
 
@@ -84,3 +92,7 @@ Use the terminal UI to watch agent interactions directly:
   - overshoot/correction,
   - fragile transitions,
   - stagnant fragmentation.
+4. `SocietyActor` (evolution layer):
+   - continent-local state, population, complexity, surplus, trust, resilience,
+   - mutable NK genome,
+   - message-driven updates (`ClimateShock`, `ResourcePulse`, `MigrationLink`).

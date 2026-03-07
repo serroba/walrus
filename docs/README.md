@@ -22,5 +22,7 @@ For emergence-first work, also use [`foundations/06_emergence-rules-and-feedback
 For macro stock-flow constraints, use [`foundations/07_pyworld3-integration-notes.md`](./foundations/07_pyworld3-integration-notes.md).
 For non-technical communication, use [`foundations/08_visualization-guidelines.md`](./foundations/08_visualization-guidelines.md).
 For concrete agent/actor simulation usage, use [`foundations/09_agent-actor-simulation.md`](./foundations/09_agent-actor-simulation.md).
+For explicit modeling assumptions and mental frameworks, use [`foundations/10_mental-frameworks-and-assumptions.md`](./foundations/10_mental-frameworks-and-assumptions.md).
+For macro-reference integration notes (World3/HANDY), use [`foundations/11_nasa-world3-handy-integration.md`](./foundations/11_nasa-world3-handy-integration.md).
 For generated example visuals, use [`visual-exploration.md`](./visual-exploration.md).
 For assumption coverage and readiness review, use [`validation/01_assumption-validation.md`](./validation/01_assumption-validation.md).

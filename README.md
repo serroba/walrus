@@ -72,6 +72,19 @@ make tui-life
 This launches a live terminal simulation where each character is an agent and
 emergence is shown frame-by-frame.
 
+## Run Evolutionary Actor Map
+
+```bash
+make evolution-run
+```
+
+This runs multi-generation actor evolution with:
+
+- Dunbar-scale social transitions,
+- NK fitness + mutation over generations,
+- continent-level energy/resource constraints,
+- local emergence and collapse cycles.
+
 ## Exploration Snapshots
 
 Generated from real scenario outputs (`make viz-report` + `node scripts/generate_snapshots.mjs`):
@@ -91,6 +104,9 @@ make system-feedback
 The engine supports explicit micro-agent interaction loops
 (cooperation/trade/conflict/migration + memory + demographic turnover)
 that roll up into macro emergence metrics.
+
+It also includes a society-level actor model with per-generation messages,
+geography constraints, and evolutionary adaptation.
 
 Usage guidance is documented in:
 
