@@ -12,6 +12,7 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
         layout,
         isolation_factor,
         dunbar_model: DunbarBehaviorModel::default(),
+        ..EvolutionConfig::default()
     });
 
     let collapse_total = result
@@ -39,6 +40,8 @@ fn summarize(layout: ContinentalLayout, isolation_factor: f64) {
                 emergent_civilizations: 0,
                 convergence_index: 0.0,
                 adaptation_divergence: 0.0,
+                natural_disaster_events: 0,
+                pandemic_events: 0,
             });
 
     println!(

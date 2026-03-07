@@ -39,6 +39,11 @@ This document defines how to include those dynamics explicitly.
 - extreme events can dominate long-run outcomes,
 - averages alone are insufficient for risk evaluation.
 
+7. **Exogenous systemic shocks**
+- natural disasters and pandemics must be represented explicitly,
+- shocks can amplify coordination failures and destabilize equilibria,
+- resilience should be assessed under repeated shock regimes, not only baseline dynamics.
+
 ## Modeling Additions (Conceptual)
 
 1. Add strategic blocs and firms as explicit actors.
@@ -60,6 +65,10 @@ This document defines how to include those dynamics explicitly.
 - avalanche/cascade tracking (size, duration, inter-event times),
 - power-law diagnostics for event distributions,
 - branching-ratio proxy to detect near-critical regimes.
+8. Add shock layers:
+- disaster and pandemic event generators,
+- health/infrastructure/production impacts,
+- shock-to-governance and shock-to-trust couplings.
 
 ## New State Variables to Track
 

@@ -26,6 +26,7 @@ Status:
 5. Game-theoretic equilibrium diagnostics (Nash/Moloch): **Missing**
 6. Superorganism inevitability testing protocol: **Missing**
 7. Criticality and heavy-tail diagnostics: **Missing**
+8. Explicit disaster/pandemic stress modeling in coordination layer: **Partially implemented**
 
 ## Assumption-to-Implementation Matrix
 
@@ -59,6 +60,10 @@ Status:
 10. Heavy-tail and criticality modeling:
    - Status: **Not implemented**
    - Gap: no cascade event logs, no power-law/log-normal tail diagnostics, no criticality index.
+11. Disaster/pandemic systemic stress:
+   - Status: **Partially implemented**
+   - Evidence: actor messages now include natural disaster and pandemic shock events.
+   - Gap: no dedicated tail-risk diagnostics for shock cascades; no policy-response module yet.
 
 ## Why This Is Not Yet "Meaningful Enough"
 

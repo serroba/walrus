@@ -38,6 +38,7 @@ Integrate criticality-aware diagnostics so extreme-event risk is modeled and rep
 - information degradation loop.
 - strategic best-response loop and equilibrium classification loop.
 - build-up/release loop for cascade dynamics (criticality behavior).
+- disaster and pandemic shock loops with recovery dynamics.
 
 ## Phase 3: AI Acceleration Layer
 
@@ -51,6 +52,7 @@ Integrate criticality-aware diagnostics so extreme-event risk is modeled and rep
 ## Phase 4: Experiments and Validation
 
 1. Add scenario manifests for baseline, coordinated, accelerated, and intervention cases.
+1.1 Include stress scenarios with high disaster and pandemic pressure.
 2. Add ensemble sweeps over key parameters.
 3. Add acceptance checks:
 - boundedness,
