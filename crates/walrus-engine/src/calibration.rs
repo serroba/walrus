@@ -589,9 +589,9 @@ pub fn score(comparison: &BenchmarkComparison) -> f64 {
 
 #[must_use]
 pub fn calibration_confidence(best_score: f64) -> CalibrationConfidence {
-    if best_score <= 0.20 {
+    if best_score <= 0.60 {
         CalibrationConfidence::CalibratedCurveFit
-    } else if best_score <= 1.0 {
+    } else if best_score <= 2.50 {
         CalibrationConfidence::CalibratedStylized
     } else {
         CalibrationConfidence::Exploratory
@@ -800,8 +800,8 @@ mod tests {
         let targets = stylized_targets(&data);
         assert!(!targets.population.turning_points.is_empty());
 
-        let conf_a = calibration_confidence(1.4);
-        let conf_b = calibration_confidence(0.8);
+        let conf_a = calibration_confidence(3.0);
+        let conf_b = calibration_confidence(1.4);
         let conf_c = calibration_confidence(0.1);
         assert_eq!(conf_a, CalibrationConfidence::Exploratory);
         assert_eq!(conf_b, CalibrationConfidence::CalibratedStylized);

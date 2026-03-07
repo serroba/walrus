@@ -4,28 +4,38 @@
 
 The model uses agent/actor simulation to make emergence explicit:
 
-1. Individuals interact locally (cooperate, trade, conflict).
-2. Local interactions shift trust, resources, and inequality.
+1. Individuals interact stochastically (cooperate, trade, conflict, migrate).
+2. Local interactions shift trust, resources, inequality, and memory.
 3. These shifts aggregate into society-level complexity and superorganism dynamics.
 
 ## Actor Levels
 
 1. `MicroAgent`:
-   - `resources`, `trust`, `status`, `aggression`, `cooperation`.
+   - `resources`, `trust`, `status`, `aggression`, `cooperation`,
+   - memory fields: `recent_conflict`, `recent_coop`.
 2. `AgentBasedSociety`:
    - collection of agents,
    - current subsistence mode,
-   - coupling and ecological pressure.
+   - coupling and ecological pressure,
+   - topology (`ring`, `small-world`, `random`) and interaction radius,
+   - demographic bounds (`min_population`, `max_population`),
+   - interaction coefficients.
 3. Macro projection:
-   - `LocalSocietyState` derived from agents each tick,
-   - mapped into `local_complexity` and `emergence_order_parameters`.
+   - `MicroMacroProjection` contract derived from agents each tick:
+     - mean resources/trust/inequality,
+     - event rates,
+     - mode composition shares.
+   - projected to `LocalSocietyState`,
+   - mapped into `local_complexity` and `emergence_from_projection`.
 
 ## Per-Tick Execution Loop
 
 1. Run micro interactions (`step_agent_based_society`):
-   - cooperation, conflict, trade events.
+   - probabilistic cooperation, conflict, trade, migration events.
+2. Apply bounded demographic dynamics:
+   - births, deaths, and replacement to enforce population floors/ceilings.
 2. Convert micro state to macro proxy (`macro_from_agents`).
-3. Compute complexity/emergence metrics.
+3. Compute complexity/emergence metrics with `micro_macro_projection`.
 4. Apply regime transition logic (`next_subsistence_mode`).
 5. Update ecological pressure and coupling feedbacks.
 
@@ -33,6 +43,7 @@ The model uses agent/actor simulation to make emergence explicit:
 
 - Seed a society:
   - `seed_agent_based_society(count, mode, coupling, eco_pressure)`
+  - `seed_agent_based_society_with_topology(...)`
 - Step one tick:
   - `step_agent_based_society(&mut society)`
 - Run full simulation:
@@ -42,7 +53,8 @@ The model uses agent/actor simulation to make emergence explicit:
 
 1. Start from baseline seeds (`HunterGatherer` / `Sedentary` / `Agriculture`).
 2. Sweep parameters:
-   - interaction traits (trust/aggression/cooperation),
+   - interaction coefficients (cooperation/conflict/trade/migration),
+   - topology and interaction radius,
    - coupling,
    - ecological pressure,
    - transition thresholds.
@@ -58,7 +70,8 @@ Use the terminal UI to watch agent interactions directly:
 
 1. `make tui-life`
 2. Observe per-tick changes in:
-   - cooperation/conflict/trade counts,
+   - cooperation/conflict/trade/migration counts,
+   - births/deaths/replacements,
    - trust and inequality,
    - mode and emergence indicators.
 

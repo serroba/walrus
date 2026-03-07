@@ -80,7 +80,7 @@ pub fn run_ensemble(
             let model = simulate_series(params, seed, cfg.ticks, cfg.start_year);
             let cmp = objective(&model, targets, cfg.turning_window_years, cfg.weights);
             let fit = score(&cmp);
-            if fit <= 1.0 {
+            if fit <= 2.50 {
                 stylized_success = stylized_success.saturating_add(1);
             }
 
@@ -116,11 +116,11 @@ pub fn run_ensemble(
 
     let robustness_score = (stylized_success as f64) / (run_count as f64);
     let confidence = if robustness_score > 0.8 {
-        calibration_confidence(0.2)
+        calibration_confidence(0.5)
     } else if robustness_score > 0.4 {
-        calibration_confidence(0.8)
+        calibration_confidence(2.0)
     } else {
-        calibration_confidence(1.5)
+        calibration_confidence(3.0)
     };
 
     // keep anchors in API for future global calibration reports

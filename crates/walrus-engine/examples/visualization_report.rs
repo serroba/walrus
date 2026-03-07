@@ -1,193 +1,176 @@
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 
-use walrus_engine::{
-    classify_trajectory, run_emergence_simulation, scenario_dense_coupled_growth,
-    scenario_ecological_stress, scenario_fragmented_low_coupling,
-    scenario_local_emergence_baseline, summarize_emergence, EmergenceSnapshot, TrajectoryClass,
-    TransitionConfig,
+use walrus_engine::calibration::{
+    baseline_parameters, calibration_confidence, default_parameter_bounds, ingest_owid_or_maddison,
+    run_calibration, stylized_targets, CalibrationConfig,
 };
+use walrus_engine::ensemble::{run_ensemble, validation_report, EnsembleConfig};
 
-#[derive(Clone, Copy)]
-struct ScenarioSpec {
-    name: &'static str,
-    builder: fn() -> Vec<walrus_engine::LocalSocietyState>,
-    cfg: TransitionConfig,
-}
-
-fn trajectory_label(class: TrajectoryClass) -> &'static str {
-    match class {
-        TrajectoryClass::StabilizingComplexity => "Stabilizing complexity",
-        TrajectoryClass::OvershootAndCorrection => "Overshoot and correction",
-        TrajectoryClass::FragileTransition => "Fragile transition",
-        TrajectoryClass::StagnantLowComplexity => "Stagnant low complexity",
-    }
-}
-
-fn trajectory_explainer(class: TrajectoryClass) -> &'static str {
-    match class {
-        TrajectoryClass::StabilizingComplexity => {
-            "Complex coordination emerges and remains relatively stable over time."
+fn confidence_label(level: walrus_engine::calibration::CalibrationConfidence) -> &'static str {
+    match level {
+        walrus_engine::calibration::CalibrationConfidence::Exploratory => "exploratory",
+        walrus_engine::calibration::CalibrationConfidence::CalibratedStylized => {
+            "calibrated-stylized"
         }
-        TrajectoryClass::OvershootAndCorrection => {
-            "The system organizes quickly, peaks, then gives up complexity under pressure."
-        }
-        TrajectoryClass::FragileTransition => {
-            "Some emergence occurs, but institutions remain unstable and prone to reversal."
-        }
-        TrajectoryClass::StagnantLowComplexity => {
-            "Coordination stays local and fragmented; large-scale complexity does not consolidate."
+        walrus_engine::calibration::CalibrationConfidence::CalibratedCurveFit => {
+            "calibrated-curve-fit"
         }
     }
-}
-
-fn write_csv(path: &str, snapshots: &[EmergenceSnapshot]) -> std::io::Result<()> {
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-
-    writeln!(
-        writer,
-        "tick,superorganism_index,mean_local_complexity,hunter_gatherer_count,sedentary_count,agriculture_count"
-    )?;
-
-    for snapshot in snapshots {
-        writeln!(
-            writer,
-            "{},{:.6},{:.6},{},{},{}",
-            snapshot.tick,
-            snapshot.global.superorganism_index,
-            snapshot.mean_local_complexity,
-            snapshot.hunter_gatherer_count,
-            snapshot.sedentary_count,
-            snapshot.agriculture_count
-        )?;
-    }
-
-    writer.flush()?;
-    Ok(())
-}
-
-fn safe_name(name: &str) -> String {
-    name.replace('/', "_")
 }
 
 fn main() -> std::io::Result<()> {
     let output_dir = "outputs/latest";
     fs::create_dir_all(output_dir)?;
 
-    let base_cfg = TransitionConfig::default();
-    let fast_transition_cfg = TransitionConfig {
-        sedentarism_population_threshold: 90,
-        sedentarism_surplus_threshold: 0.18,
-        agriculture_population_threshold: 500,
-        agriculture_surplus_threshold: 0.35,
-        ..TransitionConfig::default()
-    };
-    let fragile_cfg = TransitionConfig {
-        regression_ecological_pressure_threshold: 0.72,
-        regression_surplus_threshold: 0.28,
-        ..TransitionConfig::default()
-    };
+    let data_path = "data/benchmarks/owid_maddison_anchor.csv";
+    let benchmarks = ingest_owid_or_maddison(data_path)
+        .unwrap_or_else(|e| panic!("failed to load benchmark data at {data_path}: {e:?}"));
+    let targets = stylized_targets(&benchmarks);
 
-    let scenarios = vec![
-        ScenarioSpec {
-            name: "baseline/default",
-            builder: scenario_local_emergence_baseline,
-            cfg: base_cfg,
+    let exploratory_params = baseline_parameters();
+    let exploratory_report = validation_report(
+        exploratory_params,
+        &targets,
+        &benchmarks,
+        EnsembleConfig {
+            ticks: 180,
+            start_year: 1000,
+            ..EnsembleConfig::default()
         },
-        ScenarioSpec {
-            name: "baseline/fast-transition",
-            builder: scenario_local_emergence_baseline,
-            cfg: fast_transition_cfg,
+    );
+
+    let artifact = run_calibration(
+        &benchmarks,
+        CalibrationConfig {
+            seed: 13,
+            iterations: 220,
+            ticks: 180,
+            ..CalibrationConfig::default()
         },
-        ScenarioSpec {
-            name: "eco-stress/default",
-            builder: scenario_ecological_stress,
-            cfg: base_cfg,
+        default_parameter_bounds(),
+    );
+    let calibrated_report = validation_report(
+        artifact.parameters,
+        &targets,
+        &benchmarks,
+        EnsembleConfig {
+            ticks: 180,
+            start_year: 1000,
+            ..EnsembleConfig::default()
         },
-        ScenarioSpec {
-            name: "eco-stress/fragile",
-            builder: scenario_ecological_stress,
-            cfg: fragile_cfg,
+    );
+    let calibrated_ensemble = run_ensemble(
+        artifact.parameters,
+        &targets,
+        &benchmarks,
+        EnsembleConfig {
+            ticks: 180,
+            start_year: 1000,
+            ..EnsembleConfig::default()
         },
-        ScenarioSpec {
-            name: "dense-coupled/default",
-            builder: scenario_dense_coupled_growth,
-            cfg: base_cfg,
-        },
-        ScenarioSpec {
-            name: "fragmented-low-coupling/default",
-            builder: scenario_fragmented_low_coupling,
-            cfg: base_cfg,
-        },
-    ];
+    );
 
     let report_path = format!("{output_dir}/report.md");
     let report_file = File::create(&report_path)?;
     let mut report = BufWriter::new(report_file);
 
-    writeln!(report, "# Walrus Simulation Report")?;
+    writeln!(report, "# Walrus Validation Report")?;
     writeln!(report)?;
     writeln!(
         report,
-        "This report is designed for non-technical readers: each scenario gives a plain-language behavior label plus key metrics."
+        "Data anchor: `{}` (OWID+Maddison compatible schema)",
+        data_path
     )?;
+    writeln!(report)?;
+    writeln!(report, "## Calibration Status")?;
     writeln!(report)?;
     writeln!(
         report,
-        "| Scenario | Behavior | Start SO | Peak SO | End SO | Start CX | Peak CX | End CX | Final Modes (H/S/A) |"
+        "- baseline objective: {:.4}",
+        artifact.baseline_objective
     )?;
-    writeln!(report, "|---|---|---:|---:|---:|---:|---:|---:|---:|")?;
+    writeln!(report, "- best objective: {:.4}", artifact.best_objective)?;
+    writeln!(
+        report,
+        "- status: {}",
+        confidence_label(calibration_confidence(artifact.best_objective))
+    )?;
+    writeln!(report)?;
 
-    let mut scenario_runs: Vec<(String, TrajectoryClass)> = Vec::new();
+    writeln!(report, "## Scenario Confidence")?;
+    writeln!(report)?;
+    writeln!(
+        report,
+        "| Scenario | Confidence | Robustness | Pop fit | Urban fit | GDP fit | Energy fit |"
+    )?;
+    writeln!(report, "|---|---|---:|---:|---:|---:|---:|")?;
+    writeln!(
+        report,
+        "| exploratory baseline | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} |",
+        confidence_label(exploratory_report.confidence),
+        exploratory_report.robustness_score,
+        exploratory_report.fit_population,
+        exploratory_report.fit_urbanization,
+        exploratory_report.fit_gdp_per_capita,
+        exploratory_report.fit_energy,
+    )?;
+    writeln!(
+        report,
+        "| calibrated stylized | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} |",
+        confidence_label(calibrated_report.confidence),
+        calibrated_report.robustness_score,
+        calibrated_report.fit_population,
+        calibrated_report.fit_urbanization,
+        calibrated_report.fit_gdp_per_capita,
+        calibrated_report.fit_energy,
+    )?;
+    writeln!(report)?;
 
-    for spec in &scenarios {
-        let snapshots = run_emergence_simulation((spec.builder)(), 300, spec.cfg);
-        let summary = summarize_emergence(&snapshots);
-        let class = classify_trajectory(summary);
-        let final_snapshot = snapshots[snapshots.len() - 1];
-
-        let csv_name = format!("{output_dir}/timeline_{}.csv", safe_name(spec.name));
-        write_csv(&csv_name, &snapshots)?;
-
+    writeln!(report, "## Ensemble Uncertainty")?;
+    writeln!(report)?;
+    writeln!(report, "- runs: {}", calibrated_ensemble.runs)?;
+    writeln!(
+        report,
+        "- robustness score: {:.3}",
+        calibrated_ensemble.robustness_score
+    )?;
+    if let (Some(first), Some(last)) = (
+        calibrated_ensemble.trajectories.first(),
+        calibrated_ensemble.trajectories.last(),
+    ) {
         writeln!(
             report,
-            "| {} | {} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {:.3} | {}/{}/{} |",
-            spec.name,
-            trajectory_label(class),
-            summary.start_superorganism,
-            summary.peak_superorganism,
-            summary.end_superorganism,
-            summary.start_mean_complexity,
-            summary.peak_mean_complexity,
-            summary.end_mean_complexity,
-            final_snapshot.hunter_gatherer_count,
-            final_snapshot.sedentary_count,
-            final_snapshot.agriculture_count,
+            "- SO p50 change: {:.3} -> {:.3}",
+            first.superorganism_p50, last.superorganism_p50
         )?;
-        scenario_runs.push((spec.name.to_string(), class));
-    }
-
-    for (name, class) in scenario_runs {
-        writeln!(report)?;
-        writeln!(report, "## {}", name)?;
-        writeln!(report)?;
-        writeln!(report, "Behavior: **{}**", trajectory_label(class))?;
-        writeln!(report)?;
-        writeln!(report, "{}", trajectory_explainer(class))?;
-        writeln!(report)?;
         writeln!(
             report,
-            "Data: `outputs/latest/timeline_{}.csv`",
-            safe_name(&name)
+            "- Complexity p50 change: {:.3} -> {:.3}",
+            first.complexity_p50, last.complexity_p50
         )?;
-        writeln!(report)?;
     }
+    writeln!(report)?;
+
+    writeln!(report, "## Notes")?;
+    writeln!(report)?;
+    writeln!(
+        report,
+        "- Objective prioritizes stylized directions and turning windows, not exact curve fit."
+    )?;
+    writeln!(
+        report,
+        "- Confidence labels indicate model maturity and uncertainty posture."
+    )?;
+    writeln!(
+        report,
+        "- Outputs are descriptive only and avoid normative claims."
+    )?;
 
     report.flush()?;
 
     println!("Wrote report: {report_path}");
-    println!("Wrote scenario timelines: {output_dir}/timeline_*.csv");
+    println!("Use `make viz-app` for the interactive uncertainty viewer.");
 
     Ok(())
 }

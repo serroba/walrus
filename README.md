@@ -46,8 +46,7 @@ make viz-report
 
 This writes:
 
-- `outputs/latest/report.md` (plain-language scenario summary)
-- `outputs/latest/timeline_*.csv` (time-series data for plotting)
+- `outputs/latest/report.md` (calibration + uncertainty summary)
 
 ## Generate Standalone Viewer
 
@@ -55,9 +54,14 @@ This writes:
 make viz-app
 ```
 
-This writes a self-contained interactive dashboard:
+This writes a self-contained interactive dashboard with uncertainty bands,
+event annotations, and a driver-explanation panel:
 
 - `outputs/latest/app/index.html`
+
+Benchmark anchor used by report/viewer:
+
+- `data/benchmarks/owid_maddison_anchor.csv`
 
 ## Run Agent-Life TUI
 
@@ -84,7 +88,9 @@ make system-feedback
 
 ## Agent/Actor Simulation
 
-The engine supports explicit micro-agent interaction loops (cooperation/trade/conflict) that roll up into macro emergence metrics.
+The engine supports explicit micro-agent interaction loops
+(cooperation/trade/conflict/migration + memory + demographic turnover)
+that roll up into macro emergence metrics.
 
 Usage guidance is documented in:
 
