@@ -161,10 +161,19 @@ SIMD-friendly memory access patterns. At ~100 bytes per agent, 1M agents =
 
 ---
 
-## Phase 2: Energy Model with Types and EROEI
+## Phase 2: Energy Model with Types and EROEI ✅ COMPLETE
 
 **Goal:** Replace the single `energy_endowment` scalar with distinct energy
 sources that have different surplus profiles and transition dynamics.
+
+**Status:** Implemented in `crates/walrus-engine/src/agents.rs`. Energy landscape
+with 4 source types (biomass, agriculture, fossil, renewable) replaces flat
+`resource_regen`. Each source has EROEI dynamics with depletion tracking,
+tech-gated access via mean agent innovation, and spatial variation per grid cell.
+Configurable via `EnergyParams` struct with env var overrides in the example
+runner. Biomass regenerates; fossil depletes; agriculture requires fertile cells;
+renewable requires high tech. Innovation grows per-tick via `innovation_growth_rate`
+in `LifecycleParams`, enabling emergent tech transitions.
 
 ### 2.1 Energy Types
 
