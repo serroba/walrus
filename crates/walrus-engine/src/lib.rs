@@ -36,6 +36,26 @@ pub struct EmergenceOrderParameters {
     pub superorganism_index: f64,
 }
 
+/// Local society state used for multi-society emergence simulations.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalSocietyState {
+    pub population: u32,
+    pub mode: SubsistenceMode,
+    pub surplus_per_capita: f64,
+    pub network_coupling: f64,
+    pub ecological_pressure: f64,
+}
+
+/// Complexity signature for a local society.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalComplexity {
+    pub hierarchy: f64,
+    pub specialization: f64,
+    pub lock_in: f64,
+    pub centralization: f64,
+    pub complexity_index: f64,
+}
+
 /// Minimal agent state used by the MVP model.
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentState {
@@ -252,6 +272,80 @@ pub fn emergence_order_parameters(
     }
 }
 
+/// Computes local complexity emergence for one society.
+#[must_use]
+pub fn local_complexity(state: LocalSocietyState) -> LocalComplexity {
+    let behavior = group_behavior_profile(state.population, state.mode);
+    let dynamics = emergent_dynamics(state.population, state.mode, state.surplus_per_capita);
+
+    let hierarchy =
+        clamp01(0.70 * behavior.hierarchy_pressure / 10.0 + 0.30 * behavior.coercion_propensity);
+    let specialization = dynamics.labor_specialization;
+    let lock_in = dynamics.property_lock_in;
+    let centralization = dynamics.institutional_centralization;
+
+    let complexity_index = clamp01(
+        0.30 * hierarchy + 0.25 * specialization + 0.20 * lock_in + 0.25 * centralization
+            - 0.20 * clamp01(state.ecological_pressure),
+    );
+
+    LocalComplexity {
+        hierarchy,
+        specialization,
+        lock_in,
+        centralization,
+        complexity_index,
+    }
+}
+
+/// Aggregates many local societies into a global superorganism signal.
+#[must_use]
+pub fn aggregate_from_local_societies(societies: &[LocalSocietyState]) -> EmergenceOrderParameters {
+    if societies.is_empty() {
+        return EmergenceOrderParameters {
+            throughput_pressure: 0.0,
+            coordination_centralization: 0.0,
+            policy_lock_in: 0.0,
+            autonomy_loss: 0.0,
+            superorganism_index: 0.0,
+        };
+    }
+
+    let total_pop: f64 = societies.iter().map(|s| f64::from(s.population)).sum();
+    let denom = total_pop.max(1.0);
+
+    let mut throughput_pressure = 0.0;
+    let mut coordination_centralization = 0.0;
+    let mut policy_lock_in = 0.0;
+    let mut autonomy_loss = 0.0;
+    let mut superorganism_index = 0.0;
+
+    for state in societies {
+        let weight = f64::from(state.population) / denom;
+        let local = emergence_order_parameters(
+            state.population,
+            state.mode,
+            state.surplus_per_capita,
+            state.network_coupling,
+            state.ecological_pressure,
+        );
+
+        throughput_pressure += weight * local.throughput_pressure;
+        coordination_centralization += weight * local.coordination_centralization;
+        policy_lock_in += weight * local.policy_lock_in;
+        autonomy_loss += weight * local.autonomy_loss;
+        superorganism_index += weight * local.superorganism_index;
+    }
+
+    EmergenceOrderParameters {
+        throughput_pressure,
+        coordination_centralization,
+        policy_lock_in,
+        autonomy_loss,
+        superorganism_index,
+    }
+}
+
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
@@ -259,8 +353,9 @@ fn clamp01(value: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        emergence_order_parameters, emergent_dynamics, group_behavior_profile, AgentState,
-        SimulationConfig, SimulationEngine, SubsistenceMode, WorldState,
+        aggregate_from_local_societies, emergence_order_parameters, emergent_dynamics,
+        group_behavior_profile, local_complexity, AgentState, LocalSocietyState, SimulationConfig,
+        SimulationEngine, SubsistenceMode, WorldState,
     };
 
     fn build_engine(seed: u64) -> SimulationEngine {
@@ -382,5 +477,47 @@ mod tests {
         let high_pressure =
             emergence_order_parameters(1_000, SubsistenceMode::Agriculture, 0.5, 0.8, 0.9);
         assert!(high_pressure.superorganism_index < low_pressure.superorganism_index);
+    }
+
+    #[test]
+    fn local_complexity_rises_from_hunter_to_sedentary() {
+        let n = 200;
+        let hg = local_complexity(LocalSocietyState {
+            population: n,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.3,
+            network_coupling: 0.2,
+            ecological_pressure: 0.2,
+        });
+        let sed = local_complexity(LocalSocietyState {
+            population: n,
+            mode: SubsistenceMode::Sedentary,
+            surplus_per_capita: 0.3,
+            network_coupling: 0.2,
+            ecological_pressure: 0.2,
+        });
+        assert!(sed.complexity_index > hg.complexity_index);
+    }
+
+    #[test]
+    fn global_signal_aggregates_local_societies() {
+        let small_local = LocalSocietyState {
+            population: 100,
+            mode: SubsistenceMode::HunterGatherer,
+            surplus_per_capita: 0.1,
+            network_coupling: 0.1,
+            ecological_pressure: 0.1,
+        };
+        let large_complex = LocalSocietyState {
+            population: 10_000,
+            mode: SubsistenceMode::Agriculture,
+            surplus_per_capita: 0.6,
+            network_coupling: 0.9,
+            ecological_pressure: 0.2,
+        };
+
+        let mixed = aggregate_from_local_societies(&[small_local, large_complex]);
+        let only_small = aggregate_from_local_societies(&[small_local]);
+        assert!(mixed.superorganism_index > only_small.superorganism_index);
     }
 }

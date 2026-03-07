@@ -11,6 +11,7 @@ Ship a minimal agent-based simulator demonstrating macro emergence from micro ru
 3. 1 governance module with adaptive policy.
 4. 1 stress channel (resource -> price -> legitimacy).
 5. Group-size and subsistence-regime transitions (hunter-gatherer -> sedentary -> agriculture).
+6. Multi-society world: many local societies with local emergence metrics before global aggregation.
 
 ## Deliverables
 
