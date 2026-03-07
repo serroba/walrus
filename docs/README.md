@@ -22,3 +22,4 @@ For emergence-first work, also use [`foundations/06_emergence-rules-and-feedback
 For macro stock-flow constraints, use [`foundations/07_pyworld3-integration-notes.md`](./foundations/07_pyworld3-integration-notes.md).
 For non-technical communication, use [`foundations/08_visualization-guidelines.md`](./foundations/08_visualization-guidelines.md).
 For generated example visuals, use [`visual-exploration.md`](./visual-exploration.md).
+For assumption coverage and readiness review, use [`validation/01_assumption-validation.md`](./validation/01_assumption-validation.md).

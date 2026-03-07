@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const inputDir = path.resolve('outputs/latest');
 const outDir = path.resolve('docs/assets');
+const reportPath = path.resolve('outputs/latest/report.md');
 fs.mkdirSync(outDir, { recursive: true });
 
 const files = [
@@ -20,6 +21,35 @@ const palette = {
   so: '#1b7f79',
   cx: '#cf5c36',
 };
+
+function parseBehaviorMap() {
+  const map = new Map();
+  if (!fs.existsSync(reportPath)) {
+    return map;
+  }
+  const report = fs.readFileSync(reportPath, 'utf8');
+  const lines = report.split('\n');
+  for (const line of lines) {
+    if (!line.startsWith('| ') || line.includes('---') || line.includes('Scenario | Behavior')) {
+      continue;
+    }
+    const parts = line.split('|').map((s) => s.trim());
+    if (parts.length < 4) continue;
+    const scenario = parts[1];
+    const behavior = parts[2];
+    if (scenario && behavior) {
+      map.set(scenario, behavior);
+    }
+  }
+  return map;
+}
+
+function scenarioNameFromFilename(filename) {
+  const stem = filename.replace('timeline_', '').replace('.csv', '');
+  const idx = stem.indexOf('_');
+  if (idx === -1) return stem;
+  return `${stem.slice(0, idx)}/${stem.slice(idx + 1)}`;
+}
 
 function parseCsv(csv) {
   const lines = csv.trim().split('\n');
@@ -44,7 +74,7 @@ function linePath(points, valueKey, x, y) {
     .join(' ');
 }
 
-function render(title, rows) {
+function render(title, rows, behaviorLabel) {
   const w = 1100;
   const h = 520;
   const m = { t: 70, r: 30, b: 70, l: 70 };
@@ -81,6 +111,16 @@ function render(title, rows) {
     })
     .join('\n');
 
+  const yTicks = [1.0, 0.5, 0.0]
+    .map((v) => {
+      const yy = y(v);
+      return `
+        <line x1="${m.l}" y1="${yy}" x2="${w - m.r}" y2="${yy}" stroke="${palette.grid}" stroke-dasharray="4,4" />
+        <text x="${m.l - 14}" y="${yy + 4}" text-anchor="end" font-size="12" fill="${palette.muted}">${v.toFixed(1)}</text>
+      `;
+    })
+    .join('\n');
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
   <rect x="0" y="0" width="${w}" height="${h}" fill="${palette.bg}" />
@@ -88,9 +128,11 @@ function render(title, rows) {
 
   <text x="40" y="48" font-size="28" font-family="Georgia, serif" fill="${palette.text}">${title}</text>
   <text x="40" y="74" font-size="14" font-family="Georgia, serif" fill="${palette.muted}">Superorganism Index vs Mean Local Complexity over time</text>
+  <text x="40" y="96" font-size="13" font-family="Georgia, serif" fill="${palette.muted}">Behavior class: ${behaviorLabel ?? 'Unclassified'}</text>
 
   <line x1="${m.l}" y1="${m.t}" x2="${m.l}" y2="${h - m.b}" stroke="${palette.grid}" />
   <line x1="${m.l}" y1="${h - m.b}" x2="${w - m.r}" y2="${h - m.b}" stroke="${palette.grid}" />
+  ${yTicks}
 
   <path d="${soPath}" fill="none" stroke="${palette.so}" stroke-width="3" />
   <path d="${cxPath}" fill="none" stroke="${palette.cx}" stroke-width="3" />
@@ -106,6 +148,8 @@ function render(title, rows) {
 </svg>`;
 }
 
+const behaviorMap = parseBehaviorMap();
+
 for (const filename of files) {
   const inPath = path.join(inputDir, filename);
   if (!fs.existsSync(inPath)) {
@@ -114,8 +158,10 @@ for (const filename of files) {
     continue;
   }
   const rows = parseCsv(fs.readFileSync(inPath, 'utf8'));
-  const title = filename.replace('timeline_', '').replace('.csv', '').replaceAll('_', ' ');
-  const svg = render(title, rows);
+  const scenario = scenarioNameFromFilename(filename);
+  const title = scenario.replace('/', ' ').replaceAll('_', ' ');
+  const behavior = behaviorMap.get(scenario);
+  const svg = render(title, rows, behavior);
   const outName = filename.replace('.csv', '.svg').replace('timeline_', 'snapshot_');
   fs.writeFileSync(path.join(outDir, outName), svg, 'utf8');
   console.log(`Wrote docs/assets/${outName}`);
