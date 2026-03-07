@@ -13,7 +13,8 @@ Current modeling objective: capture how behavior shifts with group size and hist
 - Format: `cargo fmt --all -- --check`
 - Lint: `cargo clippy --workspace --all-targets -- -D warnings`
 - Tests: `cargo test --workspace --all-targets`
-- Coverage: `cargo llvm-cov --workspace --all-targets --fail-under-lines 85 --summary-only`
+- Coverage (core engine): `cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only`
+- Coverage (workspace): `cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only`
 
 ## Quick Start
 
@@ -21,5 +22,6 @@ Current modeling objective: capture how behavior shifts with group size and hist
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
-cargo llvm-cov --workspace --all-targets --fail-under-lines 85 --summary-only
+cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only
+cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only
 ```

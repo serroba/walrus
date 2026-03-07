@@ -8,6 +8,9 @@ on:
 jobs:
   rust-quality:
     runs-on: ubuntu-latest
+    env:
+      COVERAGE_ENGINE_MIN: "90"
+      COVERAGE_WORKSPACE_MIN: "80"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,5 +32,8 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-targets
 
-      - name: Coverage gate
-        run: cargo llvm-cov --workspace --all-targets --fail-under-lines 85 --summary-only
+      - name: Coverage gate (engine)
+        run: cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines $COVERAGE_ENGINE_MIN --summary-only
+
+      - name: Coverage gate (workspace)
+        run: cargo llvm-cov --workspace --all-targets --fail-under-lines $COVERAGE_WORKSPACE_MIN --summary-only

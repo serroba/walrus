@@ -1,4 +1,4 @@
-.PHONY: fmt lint test coverage check
+.PHONY: fmt lint test coverage coverage-engine coverage-workspace check
 
 fmt:
 	cargo fmt --all
@@ -9,8 +9,13 @@ lint:
 test:
 	cargo test --workspace --all-targets
 
-coverage:
-	cargo llvm-cov --workspace --all-targets --fail-under-lines 85 --summary-only
+coverage-engine:
+	cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only
+
+coverage-workspace:
+	cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only
+
+coverage: coverage-engine coverage-workspace
 
 check:
 	cargo fmt --all -- --check

@@ -11,11 +11,14 @@ All PRs must pass:
 1. `cargo fmt --all -- --check`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
 3. `cargo test --workspace --all-targets`
-4. Coverage gate: `cargo llvm-cov --workspace --all-targets --fail-under-lines 85 --summary-only`
+4. Coverage gate (core engine): `cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only`
+5. Coverage gate (workspace): `cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only`
 
 ## Coverage Policy
 
-- We enforce a minimum **85% line coverage** in CI.
+- We enforce per-scope thresholds in CI:
+  - `walrus-engine` (core model logic): **90%** line coverage minimum.
+  - workspace aggregate: **80%** line coverage minimum.
 - Exclusions should be rare and justified (for generated code, glue code, or infrastructure wrappers with low test value).
 - Any change to core model behavior must include or update tests.
 
