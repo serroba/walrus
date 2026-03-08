@@ -120,6 +120,8 @@ fn build_config() -> AgentSimConfig {
             max_prestige: env_f32("MAX_PRESTIGE", di.max_prestige),
             subsistence_level: env_f32("SUBSISTENCE_LEVEL", di.subsistence_level),
             skill_practice_rate: env_f32("SKILL_PRACTICE_RATE", di.skill_practice_rate),
+            trust_coop_weight: env_f32("TRUST_COOP_WEIGHT", di.trust_coop_weight),
+            trust_memory_decay: env_f32("TRUST_MEMORY_DECAY", di.trust_memory_decay),
         },
         lifecycle: LifecycleParams {
             health_decay_base: env_f32("HEALTH_DECAY_BASE", dl.health_decay_base),
@@ -298,12 +300,12 @@ fn institution_type_name(code: u8) -> &'static str {
 }
 
 fn print_csv_header() {
-    println!("time,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes,authority_norm,sharing_norm,property_norm_cultural,trust_outgroup,cultural_diversity,kinship,marriage,coercion_tolerance,techniques");
+    println!("time,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes,authority_norm,sharing_norm,property_norm_cultural,trust_outgroup,cultural_diversity,kinship,marriage,coercion_tolerance,techniques,coordination_failure_index,mean_trust");
 }
 
 fn print_emergent_row(time: f64, e: &walrus_engine::agents::EmergentState) {
     println!(
-        "{:.2},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.2}",
+        "{:.2},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.2},{:.4},{:.4}",
         time,
         e.population_size,
         e.mean_resources,
@@ -346,6 +348,8 @@ fn print_emergent_row(time: f64, e: &walrus_engine::agents::EmergentState) {
         marriage_name(e.dominant_marriage),
         e.mean_coercion_tolerance,
         e.technique_count,
+        e.coordination_failure_index,
+        e.mean_trust,
     );
 }
 

@@ -50,6 +50,12 @@ Agents who conflict drift apart in affinity space, deepening cultural divides. T
 
 Societies under stress are more likely to initiate wars. War winners gain resources and population, reinforcing the institutional structures (hierarchy, coercion) that enabled military mobilization. At the agent level, raids drive affinity polarization — raiding parties converge internally while diverging from victims, producing self-reinforcing tribal factions.
 
+### R8: Trust-Defection Spiral
+
+`cooperation ↓ -> trust_memory decays (incoming cooperation from neighbors drops) -> cooperation tendency ↓ -> conflict tendency ↑ -> further trust decay ↓`
+
+Each agent maintains a trust_memory (EMA) that tracks how often neighbors cooperate *toward* it, not its own cooperation rate. When incoming cooperation drops, the agent's cooperation tendency falls and its conflict tendency rises, which causes neighbors to experience less cooperation in turn. This self-reinforcing loop can drive a population from cooperative equilibrium into persistent defection. The coordination_failure_index (CFI) measures the aggregate surplus lost to this spiral: `1 - (actual_surplus / cooperative_optimal_surplus)`.
+
 ### R7: Governance Extraction Spiral
 
 `legitimacy ↓ -> extractive policy ↑ -> ecological degradation ↑ -> surplus ↓ -> price pressure ↑ -> legitimacy ↓`
