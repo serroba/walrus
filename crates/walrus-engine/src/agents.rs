@@ -4084,18 +4084,27 @@ mod tests {
 
     #[test]
     fn techniques_accumulate_over_generations() {
-        let result = simulate_agents(AgentSimConfig {
-            initial_population: 80,
-            ticks: 200,
-            world_size: 30.0,
-            ..AgentSimConfig::default()
-        });
-        let early_tech = result.snapshots[5].emergent.technique_count;
-        let late_tech = result
-            .snapshots
-            .last()
-            .map(|s| s.emergent.technique_count)
-            .unwrap_or(0.0);
+        // Average over multiple seeds to smooth stochastic variance.
+        let seeds: &[u64] = &[42, 123, 999, 7777, 31415];
+        let mut early_sum = 0.0_f32;
+        let mut late_sum = 0.0_f32;
+        for &seed in seeds {
+            let result = simulate_agents(AgentSimConfig {
+                seed,
+                initial_population: 80,
+                ticks: 200,
+                world_size: 30.0,
+                ..AgentSimConfig::default()
+            });
+            early_sum += result.snapshots[5].emergent.technique_count;
+            late_sum += result
+                .snapshots
+                .last()
+                .map(|s| s.emergent.technique_count)
+                .unwrap_or(0.0);
+        }
+        let early_tech = early_sum / seeds.len() as f32;
+        let late_tech = late_sum / seeds.len() as f32;
         assert!(
             late_tech >= early_tech,
             "techniques should accumulate: early={early_tech:.2} late={late_tech:.2}"
@@ -4252,41 +4261,49 @@ mod tests {
 
     #[test]
     fn high_complexity_run_has_higher_superorganism_index() {
-        // Dense, aggressive, hierarchical -> should score higher than sparse passive
-        let complex = simulate_agents(AgentSimConfig {
-            seed: 42,
-            initial_population: 200,
-            ticks: 200,
-            world_size: 25.0, // denser packing for more interactions
-            max_population: 3000,
-            cultural: CulturalParams {
-                authority_delegation_bonus: 0.4,
-                coercion_conflict_bonus: 0.2,
-                ..CulturalParams::default()
-            },
-            interaction: InteractionParams {
-                trust_coop_weight: 0.25,
-                ..InteractionParams::default()
-            },
-            ..AgentSimConfig::default()
-        });
-        let simple = simulate_agents(AgentSimConfig {
-            seed: 42,
-            initial_population: 30, // fewer agents
-            ticks: 200,
-            world_size: 120.0, // much sparser
-            ..AgentSimConfig::default()
-        });
-        let complex_peak = complex
-            .snapshots
-            .iter()
-            .map(|s| superorganism_index(&s.emergent))
-            .fold(0.0_f32, f32::max);
-        let simple_peak = simple
-            .snapshots
-            .iter()
-            .map(|s| superorganism_index(&s.emergent))
-            .fold(0.0_f32, f32::max);
+        // Average over multiple seeds to smooth stochastic variance.
+        let seeds: &[u64] = &[42, 123, 999, 7777, 31415];
+        let mut complex_sum = 0.0_f32;
+        let mut simple_sum = 0.0_f32;
+        for &seed in seeds {
+            // Dense, aggressive, hierarchical -> should score higher than sparse passive
+            let complex = simulate_agents(AgentSimConfig {
+                seed,
+                initial_population: 200,
+                ticks: 200,
+                world_size: 25.0, // denser packing for more interactions
+                max_population: 3000,
+                cultural: CulturalParams {
+                    authority_delegation_bonus: 0.4,
+                    coercion_conflict_bonus: 0.2,
+                    ..CulturalParams::default()
+                },
+                interaction: InteractionParams {
+                    trust_coop_weight: 0.25,
+                    ..InteractionParams::default()
+                },
+                ..AgentSimConfig::default()
+            });
+            let simple = simulate_agents(AgentSimConfig {
+                seed,
+                initial_population: 30, // fewer agents
+                ticks: 200,
+                world_size: 120.0, // much sparser
+                ..AgentSimConfig::default()
+            });
+            complex_sum += complex
+                .snapshots
+                .iter()
+                .map(|s| superorganism_index(&s.emergent))
+                .fold(0.0_f32, f32::max);
+            simple_sum += simple
+                .snapshots
+                .iter()
+                .map(|s| superorganism_index(&s.emergent))
+                .fold(0.0_f32, f32::max);
+        }
+        let complex_peak = complex_sum / seeds.len() as f32;
+        let simple_peak = simple_sum / seeds.len() as f32;
         assert!(
             complex_peak > simple_peak,
             "complex scenario should have higher superorganism index: complex={complex_peak:.3} simple={simple_peak:.3}"
