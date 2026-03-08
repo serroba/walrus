@@ -751,6 +751,424 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
     }
 }
 
+/// A discrete event that occurred during a generation, tagged with location.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MapEvent {
+    NaturalDisaster { continent: usize, severity: f64 },
+    Pandemic { continent: usize, severity: f64 },
+    ClimateShock { continent: usize, severity: f64 },
+    Collapse { continent: usize, society_id: u64 },
+    Migration { from: usize, to: usize },
+    ModeTransition { continent: usize, society_id: u64, from: SubsistenceMode, to: SubsistenceMode },
+}
+
+/// Per-generation world state emitted to observers during simulation.
+#[derive(Clone, Debug)]
+pub struct GenerationFrame {
+    pub snapshot: EvolutionSnapshot,
+    pub continent_states: Vec<ContinentState>,
+    pub continent_names: Vec<String>,
+    pub corridor_strengths: Vec<(usize, usize, f64)>,
+    pub societies: Vec<SocietyActor>,
+    pub carrying_capacities: Vec<f64>,
+    pub events: Vec<MapEvent>,
+}
+
+/// Run evolution simulation, calling `observer` after each generation with full world state.
+/// Returns the same `EvolutionResult` as `simulate_evolution`.
+#[must_use]
+pub fn simulate_evolution_with_observer<F>(config: EvolutionConfig, mut observer: F) -> EvolutionResult
+where
+    F: FnMut(&GenerationFrame),
+{
+    let mut rng = config.seed.max(1);
+    let mut map = WorldMap::from_layout(config.layout, config.isolation_factor);
+    if (config.resource_multiplier - 1.0).abs() > 1e-9 {
+        let m = config.resource_multiplier.clamp(0.1, 10.0);
+        for continent in &mut map.continents {
+            continent.carrying_capacity *= m;
+            continent.energy_endowment = (continent.energy_endowment * m).clamp(0.0, 2.0);
+        }
+        for (i, state) in map.states.iter_mut().enumerate() {
+            state.stock = map.continents[i].carrying_capacity;
+        }
+    }
+    let landscape = NkLandscape::deterministic(config.nk_n, config.nk_k, config.seed ^ 0xa5a5);
+    let mut societies = seed_societies(
+        config.initial_societies,
+        &map,
+        &mut rng,
+        config.nk_n,
+        config.population_range,
+        config.initial_complexity_range,
+    );
+    let mut snapshots = Vec::with_capacity(config.generations as usize);
+
+    for generation in 0..config.generations {
+        let mut natural_disaster_events = 0_u32;
+        let mut pandemic_events = 0_u32;
+        let continent_counts = per_continent_counts(&societies, map.continents.len());
+        let state_snapshot: Vec<ContinentState> = map.states.clone();
+
+        let continent_messages: Vec<Vec<ActorMessage>> = (0..map.continents.len())
+            .map(|ci| {
+                let mut msg_rng = rng
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(ci as u64)
+                    .wrapping_add(generation as u64)
+                    .max(1);
+                actor_messages_for(ci, &map, &continent_counts, config, &mut msg_rng)
+            })
+            .collect();
+
+        let mut events = Vec::<MapEvent>::new();
+        for (ci, msgs) in continent_messages.iter().enumerate() {
+            for message in msgs {
+                match *message {
+                    ActorMessage::NaturalDisaster { severity } => {
+                        natural_disaster_events = natural_disaster_events.saturating_add(1);
+                        events.push(MapEvent::NaturalDisaster { continent: ci, severity });
+                    }
+                    ActorMessage::PandemicWave { severity } => {
+                        pandemic_events = pandemic_events.saturating_add(1);
+                        events.push(MapEvent::Pandemic { continent: ci, severity });
+                    }
+                    ActorMessage::ClimateShock { severity } => {
+                        events.push(MapEvent::ClimateShock { continent: ci, severity });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        rand01(&mut rng);
+
+        // Record pre-update modes for transition detection
+        let pre_modes: Vec<(u64, usize, SubsistenceMode)> = societies
+            .iter()
+            .map(|s| (s.id, s.continent, s.mode))
+            .collect();
+
+        struct SocietyUpdate {
+            extraction: f64,
+            continent: usize,
+            collapsed: bool,
+            society_id: u64,
+        }
+
+        let updates: Vec<SocietyUpdate> = societies
+            .par_iter_mut()
+            .map(|society| {
+                let c_idx = society.continent;
+                let continent = &map.continents[c_idx];
+                let state = state_snapshot[c_idx];
+
+                let mut srng = society
+                    .id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(config.seed)
+                    .max(1);
+
+                apply_actor_messages(society, &continent_messages[c_idx]);
+
+                let nk_fit = landscape.fitness(society.genome.bits);
+                let energy_access =
+                    (continent.energy_endowment * state.stock * (1.0 - state.depletion)
+                        + 0.35 * continent.domesticable_biomass
+                        + 0.22 * continent.diffusion_access)
+                        .clamp(0.0, 2.0);
+
+                let layer = dunbar_behavior(society.population, config.dunbar_model);
+
+                let innovation =
+                    (0.48 * nk_fit + 0.27 * continent.diffusion_access + layer.coordination_gain)
+                        .clamp(0.0, 1.4);
+                let complexity_gain =
+                    (0.20 * energy_access + 0.24 * innovation + 0.08 * society.trust)
+                        .clamp(0.0, 1.0);
+                let maintenance = (0.06
+                    + 0.16 * society.complexity
+                    + 0.10 * society.complexity.powi(2)
+                    + layer.communication_cost
+                    + 0.5 * layer.expectation_load
+                    + 0.08 * state.depletion)
+                    .clamp(0.0, 2.0);
+
+                society.surplus =
+                    (society.surplus + complexity_gain - maintenance).clamp(-1.0, 2.5);
+                society.complexity = (society.complexity + 0.14 * complexity_gain
+                    - 0.10 * maintenance)
+                    .clamp(0.0, 1.8);
+
+                let stress_shock = if rand01(&mut srng) < continent.shock_risk {
+                    rand01(&mut srng) * 0.35
+                } else {
+                    0.0
+                };
+                society.resilience =
+                    (society.resilience + 0.04 * innovation - 0.05 * stress_shock).clamp(0.05, 1.3);
+                society.trust = (society.trust + 0.03 * innovation
+                    - 0.04 * stress_shock
+                    - layer.trust_decay
+                    - 0.02 * layer.expectation_load)
+                    .clamp(0.0, 1.0);
+
+                let growth = (0.012 * society.surplus + 0.010 * society.resilience
+                    - 0.008 * stress_shock)
+                    .clamp(-0.08, 0.12);
+                let next_population = ((society.population as f64) * (1.0 + growth)).round() as i64;
+                society.population = next_population.max(4) as u32;
+
+                let local_count = continent_counts[c_idx].max(1) as f64;
+                let extraction = ((society.population as f64) / 140_000.0)
+                    * (1.0 + 0.8 * society.complexity)
+                    + 0.012 * society.surplus.max(0.0);
+
+                let collapse_trigger = (state.stock < 0.12 * continent.carrying_capacity
+                    || state.depletion > 0.88)
+                    && society.complexity > 0.55;
+                if collapse_trigger {
+                    society.population =
+                        ((society.population as f64) * 0.68).round().max(4.0) as u32;
+                    society.complexity = (society.complexity * 0.72).clamp(0.0, 1.8);
+                    society.surplus = (society.surplus - 0.22).clamp(-1.0, 2.5);
+                    society.mode = SubsistenceMode::HunterGatherer;
+                } else {
+                    society.mode = mode_from_population(society.population, society.surplus);
+                }
+
+                society.genome = mutate_genome(society.genome, config.nk_n, &mut srng);
+
+                SocietyUpdate {
+                    extraction: extraction / local_count,
+                    continent: c_idx,
+                    collapsed: collapse_trigger,
+                    society_id: society.id,
+                }
+            })
+            .collect();
+
+        // Collect collapse events per continent
+        let collapse_events = updates.iter().filter(|u| u.collapsed).count() as u32;
+        for update in &updates {
+            if update.collapsed {
+                events.push(MapEvent::Collapse {
+                    continent: update.continent,
+                    society_id: update.society_id,
+                });
+            }
+        }
+        let mut extraction_per_continent = vec![0.0_f64; map.continents.len()];
+        for update in &updates {
+            extraction_per_continent[update.continent] += update.extraction;
+        }
+        for (ci, continent) in map.continents.iter().enumerate() {
+            let state = &mut map.states[ci];
+            let regen =
+                continent.regen_rate * continent.carrying_capacity * (1.0 - 0.35 * state.depletion);
+            let total_extraction = extraction_per_continent[ci];
+            state.stock = (state.stock + regen - total_extraction)
+                .clamp(0.0, continent.carrying_capacity * 1.1);
+            state.depletion = (state.depletion + 0.08 * total_extraction
+                - 0.45 * continent.regen_rate)
+                .clamp(0.0, 1.0);
+        }
+
+        let offspring: Vec<SocietyActor> = societies
+            .par_iter()
+            .filter_map(|society| {
+                if society.population < 30 {
+                    return None;
+                }
+                let mut srng = society
+                    .id
+                    .wrapping_mul(2862933555777941757)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(config.seed)
+                    .wrapping_add(0xBEEF)
+                    .max(1);
+                let nk_fit = landscape.fitness(society.genome.bits);
+                let mate_score = mate_fitness(society, nk_fit);
+                let reproduction_prob = 0.04 * (1.0 + 3.0 * mate_score);
+                if rand01(&mut srng) >= reproduction_prob {
+                    return None;
+                }
+                let target = migrate_target(society.continent, &map.corridors, &mut srng)
+                    .unwrap_or(society.continent);
+                let child_id = society
+                    .id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(1);
+                let mut child = *society;
+                child.id = child_id;
+                child.continent = target;
+                child.population = ((society.population as f64) * 0.16).round().max(5.0) as u32;
+                child.complexity = (society.complexity * 0.80).clamp(0.0, 1.8);
+                child.surplus = (society.surplus * 0.70).clamp(-1.0, 2.5);
+                child.genome = mutate_genome(society.genome, config.nk_n, &mut srng);
+                Some(child)
+            })
+            .collect();
+
+        // Track cross-continent migrations from offspring
+        for child in &offspring {
+            for &(parent_id, parent_ci, _) in &pre_modes {
+                let expected = parent_id
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(generation as u64)
+                    .wrapping_add(1);
+                if expected == child.id && parent_ci != child.continent {
+                    events.push(MapEvent::Migration {
+                        from: parent_ci,
+                        to: child.continent,
+                    });
+                    break;
+                }
+            }
+        }
+
+        societies.extend(offspring);
+
+        // Detect mode transitions by comparing pre/post modes
+        for society in &societies {
+            for &(id, ci, old_mode) in &pre_modes {
+                if society.id == id && ci == society.continent && old_mode != society.mode {
+                    events.push(MapEvent::ModeTransition {
+                        continent: ci,
+                        society_id: id,
+                        from: old_mode,
+                        to: society.mode,
+                    });
+                    break;
+                }
+            }
+        }
+
+        societies.retain(|s| s.population > 3);
+
+        let population_total = societies
+            .iter()
+            .map(|s| u64::from(s.population))
+            .sum::<u64>();
+        let mean_complexity = if societies.is_empty() {
+            0.0
+        } else {
+            societies.iter().map(|s| s.complexity).sum::<f64>() / (societies.len() as f64)
+        };
+        let mean_energy_access = if societies.is_empty() {
+            0.0
+        } else {
+            societies
+                .iter()
+                .map(|s| {
+                    let c = &map.continents[s.continent];
+                    let st = map.states[s.continent];
+                    (c.energy_endowment * st.stock * (1.0 - st.depletion)
+                        + 0.25 * c.domesticable_biomass
+                        + 0.15 * c.diffusion_access)
+                        .clamp(0.0, 1.5)
+                })
+                .sum::<f64>()
+                / (societies.len() as f64)
+        };
+        let emergent_civilizations = societies
+            .iter()
+            .filter(|s| s.population >= 150 && s.complexity > 0.65)
+            .count() as u32;
+        let continent_complexity_means =
+            continent_means(&societies, map.continents.len(), |s| s.complexity);
+        let continent_resilience_means =
+            continent_means(&societies, map.continents.len(), |s| s.resilience);
+        let convergence_index = convergence_index(&continent_complexity_means);
+        let adaptation_divergence = standard_deviation(&continent_resilience_means);
+
+        let local_states: Vec<LocalSocietyState> = societies
+            .iter()
+            .map(|s| {
+                let st = map.states[s.continent];
+                let coupling = map
+                    .corridors
+                    .iter()
+                    .filter(|cor| cor.from == s.continent)
+                    .map(|cor| cor.strength)
+                    .sum::<f64>()
+                    .clamp(0.0, 1.0);
+                let eco_pressure = st.depletion;
+                LocalSocietyState {
+                    population: s.population,
+                    mode: s.mode,
+                    surplus_per_capita: s.surplus.max(0.0),
+                    network_coupling: coupling,
+                    ecological_pressure: eco_pressure.clamp(0.0, 1.0),
+                    governance: crate::GovernanceState::default(),
+                }
+            })
+            .collect();
+        let global_emergence = crate::aggregate_from_local_societies(&local_states);
+
+        let snap = EvolutionSnapshot {
+            generation,
+            population_total,
+            mean_complexity,
+            mean_energy_access,
+            collapse_events,
+            emergent_civilizations,
+            convergence_index,
+            adaptation_divergence,
+            superorganism_index: global_emergence.superorganism_index,
+            natural_disaster_events,
+            pandemic_events,
+        };
+
+        let frame = GenerationFrame {
+            snapshot: snap,
+            continent_states: map.states.clone(),
+            continent_names: map.continents.iter().map(|c| c.name.clone()).collect(),
+            corridor_strengths: map
+                .corridors
+                .iter()
+                .map(|c| (c.from, c.to, c.strength))
+                .collect(),
+            societies: societies.clone(),
+            carrying_capacities: map.continents.iter().map(|c| c.carrying_capacity).collect(),
+            events,
+        };
+        observer(&frame);
+
+        snapshots.push(snap);
+    }
+
+    let mut continent_outcomes = Vec::new();
+    for (idx, continent) in map.continents.iter().enumerate() {
+        let local = societies
+            .iter()
+            .filter(|s| s.continent == idx)
+            .copied()
+            .collect::<Vec<SocietyActor>>();
+        let total_population = local.iter().map(|s| u64::from(s.population)).sum::<u64>();
+        let mean_complexity = if local.is_empty() {
+            0.0
+        } else {
+            local.iter().map(|s| s.complexity).sum::<f64>() / (local.len() as f64)
+        };
+
+        continent_outcomes.push(ContinentOutcome {
+            name: continent.name.clone(),
+            surviving_societies: local.len(),
+            total_population,
+            mean_complexity,
+            mean_depletion: map.states[idx].depletion,
+        });
+    }
+
+    EvolutionResult {
+        snapshots,
+        continent_outcomes,
+        final_societies: societies,
+    }
+}
+
 fn standard_deviation(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
