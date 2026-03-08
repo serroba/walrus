@@ -16,8 +16,8 @@ use walrus_engine::event_sim::{simulate_event_driven, EventParams, EventSimConfi
 /// Compute the KS statistic between two samples.
 /// Returns (D, approximate p-value using the asymptotic formula).
 fn ks_two_sample(a: &mut [f64], b: &mut [f64]) -> (f64, f64) {
-    a.sort_by(|x, y| x.partial_cmp(y).unwrap());
-    b.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    a.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    b.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
 
     let na = a.len() as f64;
     let nb = b.len() as f64;

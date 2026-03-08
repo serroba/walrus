@@ -304,9 +304,15 @@ mod tests {
             },
         });
 
-        let e1 = q.pop().unwrap();
-        let e2 = q.pop().unwrap();
-        let e3 = q.pop().unwrap();
+        let Some(e1) = q.pop() else {
+            panic!("expected event 1");
+        };
+        let Some(e2) = q.pop() else {
+            panic!("expected event 2");
+        };
+        let Some(e3) = q.pop() else {
+            panic!("expected event 3");
+        };
         assert!(e1.time <= e2.time);
         assert!(e2.time <= e3.time);
         assert!((e1.time - 1.0).abs() < 1e-9);
@@ -408,7 +414,10 @@ mod tests {
         assert_eq!(processed, 2);
         // The t=10 event should remain in the queue.
         assert_eq!(q.len(), 1);
-        assert!((q.peek().unwrap().time - 10.0).abs() < 1e-9);
+        let Some(remaining) = q.peek() else {
+            panic!("expected remaining event");
+        };
+        assert!((remaining.time - 10.0).abs() < 1e-9);
     }
 
     #[test]

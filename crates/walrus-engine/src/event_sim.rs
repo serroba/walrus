@@ -1049,7 +1049,7 @@ fn measure_emergent_state_from_counters(
     }
 
     // Public goods investment estimate
-    let public_goods_investment = if pop.len() > 0 {
+    let public_goods_investment = if !pop.is_empty() {
         let total_tax: f32 = pop
             .patrons
             .iter()
@@ -1884,7 +1884,10 @@ mod tests {
         let result = simulate_event_driven(cfg);
         if result.snapshots.len() >= 10 {
             let early = result.snapshots[2].emergent.mean_innovation;
-            let late = result.snapshots.last().unwrap().emergent.mean_innovation;
+            let Some(last_snap) = result.snapshots.last() else {
+                panic!("expected snapshots");
+            };
+            let late = last_snap.emergent.mean_innovation;
             assert!(
                 late > early,
                 "innovation should grow: early={early:.4} late={late:.4}"
