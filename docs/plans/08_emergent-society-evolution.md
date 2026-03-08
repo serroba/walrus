@@ -408,7 +408,18 @@ superorganism dynamic.
 
 ---
 
-## Phase 5: Cultural Transmission and Social Structure
+## Phase 5: Cultural Transmission and Social Structure ✅ COMPLETE
+
+> **Status (2026-03-08):** Implemented in `agents.rs`. Replaced `norms: u64`
+> bitfield with rich `Culture` struct containing kinship system, marriage rule,
+> residence rule, inheritance rule (discrete enums), plus authority_norm,
+> coercion_tolerance, sharing_norm, property_norm, trust_outgroup, risk_tolerance
+> (continuous f32), and techniques bitfield. Three transmission mechanisms:
+> vertical (parent→child with blending and mutation), horizontal (peer→peer
+> random trait adoption), oblique (prestige-biased trait and technique spread).
+> Cultural traits modulate behavior: sharing_norm→cooperation, trust_outgroup→trade,
+> coercion_tolerance→conflict, authority_norm→delegation willingness. 9 new CSV
+> columns, `CulturalParams` with 9 configurable parameters, 6 new tests.
 
 **Goal:** Agents transmit beliefs, norms, and techniques between
 generations and across societies, enabling cumulative culture and

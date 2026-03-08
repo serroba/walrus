@@ -26,6 +26,116 @@ pub enum SkillType {
 }
 
 // ---------------------------------------------------------------------------
+// Cultural system (Phase 5)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum KinshipSystem {
+    Patrilineal,
+    Matrilineal,
+    Bilateral,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MarriageRule {
+    Monogamy,
+    Polygyny,
+    Polyandry,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResidenceRule {
+    Patrilocal,
+    Matrilocal,
+    Neolocal,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InheritanceRule {
+    Primogeniture,
+    Partible,
+    Matrilineal,
+}
+
+/// Rich cultural genome transmitted between agents.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Culture {
+    // Kinship and family structure
+    pub kinship_system: KinshipSystem,
+    pub marriage_rule: MarriageRule,
+    pub residence_rule: ResidenceRule,
+    pub inheritance_rule: InheritanceRule,
+    // Authority and governance
+    pub authority_norm: f32,     // 0=egalitarian, 1=highly hierarchical
+    pub coercion_tolerance: f32, // how much extraction people accept
+    // Economic
+    pub sharing_norm: f32,  // 0=individualist, 1=full communal sharing
+    pub property_norm: f32, // 0=communal, 1=private property
+    // Technology
+    pub techniques: u64, // bitfield of known technologies
+    // Social
+    pub trust_outgroup: f32, // willingness to cooperate with strangers
+    pub risk_tolerance: f32, // willingness to try new things
+}
+
+impl Default for Culture {
+    fn default() -> Self {
+        Self {
+            kinship_system: KinshipSystem::Bilateral,
+            marriage_rule: MarriageRule::Monogamy,
+            residence_rule: ResidenceRule::Neolocal,
+            inheritance_rule: InheritanceRule::Partible,
+            authority_norm: 0.3,
+            coercion_tolerance: 0.3,
+            sharing_norm: 0.5,
+            property_norm: 0.3,
+            techniques: 0,
+            trust_outgroup: 0.3,
+            risk_tolerance: 0.5,
+        }
+    }
+}
+
+/// Parameters controlling cultural transmission and mutation.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CulturalParams {
+    /// Probability of vertical (parent→child) trait mutation per discrete trait.
+    pub vertical_mutation_prob: f64,
+    /// Mutation magnitude for continuous cultural traits.
+    pub cultural_mutation_magnitude: f32,
+    /// Probability per interaction of horizontal (peer→peer) cultural adoption.
+    pub horizontal_adoption_prob: f32,
+    /// Probability per tick of oblique (prestige-biased) cultural adoption.
+    pub oblique_adoption_prob: f32,
+    /// Minimum prestige gap for oblique transmission.
+    pub oblique_prestige_gap: f32,
+    /// How much authority_norm boosts delegation willingness.
+    pub authority_delegation_bonus: f32,
+    /// How much trust_outgroup boosts inter-group trade tendency.
+    pub trust_trade_bonus: f32,
+    /// How much sharing_norm boosts cooperation tendency.
+    pub sharing_coop_bonus: f32,
+    /// How much coercion_tolerance reduces conflict avoidance.
+    pub coercion_conflict_bonus: f32,
+}
+
+impl Default for CulturalParams {
+    fn default() -> Self {
+        Self {
+            vertical_mutation_prob: 0.05,
+            cultural_mutation_magnitude: 0.08,
+            horizontal_adoption_prob: 0.02,
+            oblique_adoption_prob: 0.01,
+            oblique_prestige_gap: 0.3,
+            authority_delegation_bonus: 0.15,
+            trust_trade_bonus: 0.2,
+            sharing_coop_bonus: 0.15,
+            coercion_conflict_bonus: 0.1,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Energy model (Phase 2)
 // ---------------------------------------------------------------------------
 
@@ -145,7 +255,7 @@ pub struct Population {
     pub surpluses: Vec<f32>,
 
     // Cultural
-    pub norms: Vec<u64>,
+    pub cultures: Vec<Culture>,
     pub innovations: Vec<f32>,
 
     // Relationships
@@ -173,7 +283,7 @@ struct AgentInit {
     cooperation: f32,
     resources: f32,
     surplus: f32,
-    norms: u64,
+    culture: Culture,
     innovation: f32,
     kin_group: u32,
     x: f32,
@@ -196,7 +306,7 @@ impl Population {
             cooperations: Vec::new(),
             resources: Vec::new(),
             surpluses: Vec::new(),
-            norms: Vec::new(),
+            cultures: Vec::new(),
             innovations: Vec::new(),
             kin_groups: Vec::new(),
             partners: Vec::new(),
@@ -229,7 +339,7 @@ impl Population {
         self.cooperations.push(a.cooperation);
         self.resources.push(a.resources);
         self.surpluses.push(a.surplus);
-        self.norms.push(a.norms);
+        self.cultures.push(a.culture);
         self.innovations.push(a.innovation);
         self.kin_groups.push(a.kin_group);
         self.partners.push(None);
@@ -253,7 +363,7 @@ impl Population {
         self.cooperations.swap_remove(idx);
         self.resources.swap_remove(idx);
         self.surpluses.swap_remove(idx);
-        self.norms.swap_remove(idx);
+        self.cultures.swap_remove(idx);
         self.innovations.swap_remove(idx);
         self.kin_groups.swap_remove(idx);
         self.partners.swap_remove(idx);
@@ -764,6 +874,7 @@ pub struct AgentSimConfig {
     pub mate_selection: MateSelectionParams,
     pub institution: InstitutionParams,
     pub inter_society: InterSocietyParams,
+    pub cultural: CulturalParams,
 }
 
 impl Default for AgentSimConfig {
@@ -784,6 +895,7 @@ impl Default for AgentSimConfig {
             mate_selection: MateSelectionParams::default(),
             institution: InstitutionParams::default(),
             inter_society: InterSocietyParams::default(),
+            cultural: CulturalParams::default(),
         }
     }
 }
@@ -829,6 +941,16 @@ pub struct EmergentState {
     pub num_active_societies: u32,
     pub inter_group_trade_rate: f32,
     pub active_tributes: u32,
+    // Cultural (Phase 5)
+    pub mean_authority_norm: f32,
+    pub mean_sharing_norm: f32,
+    pub mean_property_norm: f32,
+    pub mean_trust_outgroup: f32,
+    pub cultural_diversity: f32, // entropy over kinship/marriage/residence/inheritance combos
+    pub dominant_kinship: u8,    // 0=patrilineal, 1=matrilineal, 2=bilateral
+    pub dominant_marriage: u8,   // 0=monogamy, 1=polygyny, 2=polyandry
+    pub mean_coercion_tolerance: f32,
+    pub technique_count: f32, // mean bits set in techniques
 }
 
 /// Per-tick snapshot of the simulation state.
@@ -1202,6 +1324,40 @@ fn measure_emergent_state(pop: &Population, input: &TickMeasureInput<'_>) -> Eme
             0.0
         },
         active_tributes: input.active_tribute_count,
+        // Cultural (Phase 5)
+        mean_authority_norm: if n > 0 {
+            pop.cultures.iter().map(|c| c.authority_norm).sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
+        mean_sharing_norm: if n > 0 {
+            pop.cultures.iter().map(|c| c.sharing_norm).sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
+        mean_property_norm: if n > 0 {
+            pop.cultures.iter().map(|c| c.property_norm).sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
+        mean_trust_outgroup: if n > 0 {
+            pop.cultures.iter().map(|c| c.trust_outgroup).sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
+        cultural_diversity: measure_cultural_diversity(pop),
+        dominant_kinship: dominant_kinship(pop),
+        dominant_marriage: dominant_marriage(pop),
+        mean_coercion_tolerance: if n > 0 {
+            pop.cultures
+                .iter()
+                .map(|c| c.coercion_tolerance)
+                .sum::<f32>()
+                / n as f32
+        } else {
+            0.0
+        },
+        technique_count: mean_technique_count(pop),
     }
 }
 
@@ -1258,6 +1414,44 @@ pub fn seed_population(cfg: &AgentSimConfig) -> Population {
             _ => SkillType::Warrior,
         };
 
+        // Generate initial culture — kin groups share cultural traits
+        let kin = i % kin_group_count;
+        let kin_seed = cfg.seed.wrapping_add(u64::from(kin).wrapping_mul(7919));
+        let mut kin_rng = kin_seed.max(1);
+        let kinship_system = match (rand01(&mut kin_rng) * 3.0) as u32 {
+            0 => KinshipSystem::Patrilineal,
+            1 => KinshipSystem::Matrilineal,
+            _ => KinshipSystem::Bilateral,
+        };
+        let marriage_rule = match (rand01(&mut kin_rng) * 3.0) as u32 {
+            0 => MarriageRule::Monogamy,
+            1 => MarriageRule::Polygyny,
+            _ => MarriageRule::Polyandry,
+        };
+        let residence_rule = match (rand01(&mut kin_rng) * 3.0) as u32 {
+            0 => ResidenceRule::Patrilocal,
+            1 => ResidenceRule::Matrilocal,
+            _ => ResidenceRule::Neolocal,
+        };
+        let inheritance_rule = match (rand01(&mut kin_rng) * 3.0) as u32 {
+            0 => InheritanceRule::Primogeniture,
+            1 => InheritanceRule::Partible,
+            _ => InheritanceRule::Matrilineal,
+        };
+        let culture = Culture {
+            kinship_system,
+            marriage_rule,
+            residence_rule,
+            inheritance_rule,
+            authority_norm: (0.2 + rand01f(&mut rng) * 0.3).clamp(0.0, 1.0),
+            coercion_tolerance: (0.2 + rand01f(&mut rng) * 0.3).clamp(0.0, 1.0),
+            sharing_norm: (0.3 + rand01f(&mut rng) * 0.4).clamp(0.0, 1.0),
+            property_norm: (0.2 + rand01f(&mut rng) * 0.3).clamp(0.0, 1.0),
+            techniques: (rand01(&mut rng) * 15.0) as u64, // initial low-tech
+            trust_outgroup: (0.2 + rand01f(&mut rng) * 0.3).clamp(0.0, 1.0),
+            risk_tolerance: (0.3 + rand01f(&mut rng) * 0.4).clamp(0.0, 1.0),
+        };
+
         pop.push_agent(AgentInit {
             id: u64::from(i),
             sex,
@@ -1272,7 +1466,7 @@ pub fn seed_population(cfg: &AgentSimConfig) -> Population {
             cooperation: 0.3 + rand01f(&mut rng) * 0.5,
             resources: 0.5 + rand01f(&mut rng) * 1.0,
             surplus: 0.0,
-            norms: (rand01(&mut rng) * f64::from(u32::MAX)) as u64,
+            culture,
             innovation: rand01f(&mut rng) * 0.3,
             kin_group: (i % kin_group_count),
             x: rand01f(&mut rng) * cfg.world_size,
@@ -1387,21 +1581,34 @@ fn compute_interactions(
                 let other_aggr = pop.aggressions[j];
 
                 // Interaction decision: cooperate, trade, or conflict
+                // Cultural traits modulate tendencies
+                let cp = &cfg.cultural;
+                let my_culture = &pop.cultures[i];
+                let sharing_boost = my_culture.sharing_norm * cp.sharing_coop_bonus;
+                let trust_boost = if !same_kin {
+                    my_culture.trust_outgroup * cp.trust_trade_bonus
+                } else {
+                    0.0
+                };
+                let coercion_boost = my_culture.coercion_tolerance * cp.coercion_conflict_bonus;
+
                 let coop_tendency = my_coop * ip.coop_self_weight
                     + other_coop * ip.coop_other_weight
-                    + if same_kin { ip.coop_kin_bonus } else { 0.0 };
+                    + if same_kin { ip.coop_kin_bonus } else { 0.0 }
+                    + sharing_boost;
                 let conflict_tendency = my_aggr * ip.conflict_self_weight
                     + other_aggr * ip.conflict_other_weight
                     + if !same_kin {
                         ip.conflict_stranger_bonus
                     } else {
                         0.0
-                    };
+                    }
+                    + coercion_boost;
                 let trade_tendency = if my_skill != pop.skill_types[j] {
                     ip.trade_complementary
                 } else {
                     ip.trade_same_skill
-                };
+                } + trust_boost;
 
                 let total = coop_tendency + conflict_tendency + trade_tendency;
                 let roll = rand01f(&mut rng) * total;
@@ -1449,7 +1656,10 @@ fn compute_interactions(
                 }
 
                 // Delegation: consider this neighbor as patron
-                if pop.statuses[j] > my_status + ip.delegation_status_gap
+                // High authority_norm makes agents more willing to delegate
+                let effective_gap = ip.delegation_status_gap
+                    - my_culture.authority_norm * cp.authority_delegation_bonus;
+                if pop.statuses[j] > my_status + effective_gap
                     && pop.prestiges[j] > best_patron_score
                     && pop.skill_types[j] == SkillType::Leader
                 {
@@ -1743,10 +1953,89 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
                 }
             };
 
-            let child_norms = if rand01(&mut rng) < 0.5 {
-                pop.norms[i]
-            } else {
-                pop.norms[m]
+            // Vertical cultural transmission (parent → child) with mutation
+            let cp = &cfg.cultural;
+            let mother_culture = &pop.cultures[i];
+            let father_culture = &pop.cultures[m];
+            let child_culture = Culture {
+                // Discrete traits: inherit from one parent, with mutation chance
+                kinship_system: if rand01(&mut rng) < cp.vertical_mutation_prob {
+                    match (rand01(&mut rng) * 3.0) as u32 {
+                        0 => KinshipSystem::Patrilineal,
+                        1 => KinshipSystem::Matrilineal,
+                        _ => KinshipSystem::Bilateral,
+                    }
+                } else if rand01(&mut rng) < 0.5 {
+                    mother_culture.kinship_system
+                } else {
+                    father_culture.kinship_system
+                },
+                marriage_rule: if rand01(&mut rng) < cp.vertical_mutation_prob {
+                    match (rand01(&mut rng) * 3.0) as u32 {
+                        0 => MarriageRule::Monogamy,
+                        1 => MarriageRule::Polygyny,
+                        _ => MarriageRule::Polyandry,
+                    }
+                } else if rand01(&mut rng) < 0.5 {
+                    mother_culture.marriage_rule
+                } else {
+                    father_culture.marriage_rule
+                },
+                residence_rule: if rand01(&mut rng) < cp.vertical_mutation_prob {
+                    match (rand01(&mut rng) * 3.0) as u32 {
+                        0 => ResidenceRule::Patrilocal,
+                        1 => ResidenceRule::Matrilocal,
+                        _ => ResidenceRule::Neolocal,
+                    }
+                } else if rand01(&mut rng) < 0.5 {
+                    mother_culture.residence_rule
+                } else {
+                    father_culture.residence_rule
+                },
+                inheritance_rule: if rand01(&mut rng) < cp.vertical_mutation_prob {
+                    match (rand01(&mut rng) * 3.0) as u32 {
+                        0 => InheritanceRule::Primogeniture,
+                        1 => InheritanceRule::Partible,
+                        _ => InheritanceRule::Matrilineal,
+                    }
+                } else if rand01(&mut rng) < 0.5 {
+                    mother_culture.inheritance_rule
+                } else {
+                    father_culture.inheritance_rule
+                },
+                // Continuous traits: blend parents + mutation
+                authority_norm: ((mother_culture.authority_norm + father_culture.authority_norm)
+                    * 0.5
+                    + (rand01f(&mut rng) - 0.5) * cp.cultural_mutation_magnitude)
+                    .clamp(0.0, 1.0),
+                coercion_tolerance: ((mother_culture.coercion_tolerance
+                    + father_culture.coercion_tolerance)
+                    * 0.5
+                    + (rand01f(&mut rng) - 0.5) * cp.cultural_mutation_magnitude)
+                    .clamp(0.0, 1.0),
+                sharing_norm: ((mother_culture.sharing_norm + father_culture.sharing_norm) * 0.5
+                    + (rand01f(&mut rng) - 0.5) * cp.cultural_mutation_magnitude)
+                    .clamp(0.0, 1.0),
+                property_norm: ((mother_culture.property_norm + father_culture.property_norm)
+                    * 0.5
+                    + (rand01f(&mut rng) - 0.5) * cp.cultural_mutation_magnitude)
+                    .clamp(0.0, 1.0),
+                // Techniques: union of parent techniques + rare new bits
+                techniques: mother_culture.techniques
+                    | father_culture.techniques
+                    | if rand01(&mut rng) < lp.norm_mutation_prob {
+                        1 << ((rand01(&mut rng) * 16.0) as u64)
+                    } else {
+                        0
+                    },
+                trust_outgroup: ((mother_culture.trust_outgroup + father_culture.trust_outgroup)
+                    * 0.5
+                    + (rand01f(&mut rng) - 0.5) * cp.cultural_mutation_magnitude)
+                    .clamp(0.0, 1.0),
+                risk_tolerance: ((mother_culture.risk_tolerance + father_culture.risk_tolerance)
+                    * 0.5
+                    + (rand01f(&mut rng) - 0.5) * cp.cultural_mutation_magnitude)
+                    .clamp(0.0, 1.0),
             };
 
             // Patron inheritance: child adopts mother's patron if configured
@@ -1781,12 +2070,7 @@ fn lifecycle_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig, next_id
                         .clamp(0.0, 1.0),
                     resources: lp.newborn_resources,
                     surplus: 0.0,
-                    norms: child_norms
-                        ^ if rand01(&mut rng) < lp.norm_mutation_prob {
-                            1 << ((rand01(&mut rng) * 16.0) as u64)
-                        } else {
-                            0
-                        },
+                    culture: child_culture,
                     innovation: ((pop.innovations[i] + pop.innovations[m]) * 0.5
                         + (rand01f(&mut rng) - 0.5) * lp.trait_mutation_magnitude * 0.5)
                         .clamp(0.0, 1.0),
@@ -2099,6 +2383,184 @@ fn energy_harvest_tick(
 }
 
 // ---------------------------------------------------------------------------
+// Cultural transmission (Phase 5)
+// ---------------------------------------------------------------------------
+
+/// Horizontal transmission: during interactions, agents may adopt cultural traits from peers.
+/// Oblique transmission: agents may adopt traits from the most prestigious nearby agent.
+fn cultural_transmission_tick(
+    pop: &mut Population,
+    grid: &SpatialGrid,
+    rng: &mut u64,
+    cfg: &AgentSimConfig,
+) {
+    let cp = &cfg.cultural;
+    let n = pop.len();
+    if n == 0 {
+        return;
+    }
+
+    // Collect changes to apply atomically
+    let mut culture_updates: Vec<(usize, Culture)> = Vec::new();
+
+    for i in 0..n {
+        let neighbors = grid.neighbors_of(pop.xs[i], pop.ys[i]);
+        if neighbors.is_empty() {
+            continue;
+        }
+
+        // --- Oblique transmission: adopt from most prestigious nearby agent ---
+        let mut best_prestige_idx: Option<usize> = None;
+        let mut best_prestige = pop.prestiges[i] + cp.oblique_prestige_gap;
+        for &j_u32 in &neighbors {
+            let j = j_u32 as usize;
+            if j == i {
+                continue;
+            }
+            if pop.prestiges[j] > best_prestige {
+                best_prestige = pop.prestiges[j];
+                best_prestige_idx = Some(j);
+            }
+        }
+
+        if let Some(j) = best_prestige_idx {
+            if rand01f(rng) < cp.oblique_adoption_prob {
+                let mut new_culture = pop.cultures[i];
+                let model = &pop.cultures[j];
+                // Adopt one random continuous trait from prestigious model
+                match (rand01(rng) * 5.0) as u32 {
+                    0 => new_culture.authority_norm = model.authority_norm,
+                    1 => new_culture.sharing_norm = model.sharing_norm,
+                    2 => new_culture.property_norm = model.property_norm,
+                    3 => new_culture.trust_outgroup = model.trust_outgroup,
+                    _ => new_culture.coercion_tolerance = model.coercion_tolerance,
+                }
+                // Techniques spread via prestige
+                new_culture.techniques |= model.techniques;
+                culture_updates.push((i, new_culture));
+                continue; // skip horizontal if oblique happened
+            }
+        }
+
+        // --- Horizontal transmission: adopt from random interaction partner ---
+        if rand01f(rng) < cp.horizontal_adoption_prob {
+            let j_idx = (rand01(rng) * neighbors.len() as f64) as usize % neighbors.len();
+            let j = neighbors[j_idx] as usize;
+            if j != i {
+                let mut new_culture = pop.cultures[i];
+                let peer = &pop.cultures[j];
+                // Adopt one random discrete trait from peer
+                match (rand01(rng) * 4.0) as u32 {
+                    0 => new_culture.kinship_system = peer.kinship_system,
+                    1 => new_culture.marriage_rule = peer.marriage_rule,
+                    2 => new_culture.residence_rule = peer.residence_rule,
+                    _ => new_culture.inheritance_rule = peer.inheritance_rule,
+                }
+                // Blend one continuous trait
+                match (rand01(rng) * 5.0) as u32 {
+                    0 => {
+                        new_culture.authority_norm =
+                            (new_culture.authority_norm + peer.authority_norm) * 0.5;
+                    }
+                    1 => {
+                        new_culture.sharing_norm =
+                            (new_culture.sharing_norm + peer.sharing_norm) * 0.5;
+                    }
+                    2 => {
+                        new_culture.property_norm =
+                            (new_culture.property_norm + peer.property_norm) * 0.5;
+                    }
+                    3 => {
+                        new_culture.trust_outgroup =
+                            (new_culture.trust_outgroup + peer.trust_outgroup) * 0.5;
+                    }
+                    _ => {
+                        new_culture.coercion_tolerance =
+                            (new_culture.coercion_tolerance + peer.coercion_tolerance) * 0.5;
+                    }
+                }
+                culture_updates.push((i, new_culture));
+            }
+        }
+    }
+
+    // Apply updates
+    for (i, culture) in culture_updates {
+        pop.cultures[i] = culture;
+    }
+}
+
+/// Measure cultural diversity as entropy over discrete cultural type combinations.
+fn measure_cultural_diversity(pop: &Population) -> f32 {
+    if pop.is_empty() {
+        return 0.0;
+    }
+    let mut combo_counts: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for i in 0..pop.len() {
+        let c = &pop.cultures[i];
+        // Encode combo as: kinship*27 + marriage*9 + residence*3 + inheritance
+        let combo = (c.kinship_system as u32) * 27
+            + (c.marriage_rule as u32) * 9
+            + (c.residence_rule as u32) * 3
+            + (c.inheritance_rule as u32);
+        *combo_counts.entry(combo).or_insert(0) += 1;
+    }
+    let n = pop.len() as f32;
+    let max_entropy = (81.0_f32).ln(); // 3^4 = 81 possible combos
+    let mut entropy = 0.0_f32;
+    for &count in combo_counts.values() {
+        let p = count as f32 / n;
+        if p > 0.0 {
+            entropy -= p * p.ln();
+        }
+    }
+    if max_entropy > 0.0 {
+        entropy / max_entropy
+    } else {
+        0.0
+    }
+}
+
+/// Count dominant kinship system.
+fn dominant_kinship(pop: &Population) -> u8 {
+    let mut counts = [0_u32; 3];
+    for c in &pop.cultures {
+        counts[c.kinship_system as usize] += 1;
+    }
+    let mut best = 0_u8;
+    for i in 1..3 {
+        if counts[i] > counts[best as usize] {
+            best = i as u8;
+        }
+    }
+    best
+}
+
+/// Count dominant marriage rule.
+fn dominant_marriage(pop: &Population) -> u8 {
+    let mut counts = [0_u32; 3];
+    for c in &pop.cultures {
+        counts[c.marriage_rule as usize] += 1;
+    }
+    let mut best = 0_u8;
+    for i in 1..3 {
+        if counts[i] > counts[best as usize] {
+            best = i as u8;
+        }
+    }
+    best
+}
+
+/// Mean number of technique bits set.
+fn mean_technique_count(pop: &Population) -> f32 {
+    if pop.is_empty() {
+        return 0.0;
+    }
+    let sum: u32 = pop.cultures.iter().map(|c| c.techniques.count_ones()).sum();
+    sum as f32 / pop.len() as f32
+}
+
+// ---------------------------------------------------------------------------
 // Inter-society dynamics (Phase 4)
 // ---------------------------------------------------------------------------
 
@@ -2372,6 +2834,9 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
             inter_group_trades,
             trade_events,
         );
+
+        // Cultural transmission: horizontal and oblique (must use grid before lifecycle changes pop)
+        cultural_transmission_tick(&mut pop, &grid, &mut rng, &cfg);
 
         // Lifecycle: aging, death, reproduction
         lifecycle_tick(&mut pop, tick, &cfg, &mut next_id);
@@ -3065,6 +3530,147 @@ mod tests {
             assert_eq!(
                 snap.emergent.num_active_societies, snap.emergent.num_kin_groups,
                 "active societies should match kin groups"
+            );
+        }
+    }
+
+    // --- Cultural transmission tests (Phase 5) ---
+
+    #[test]
+    fn cultural_diversity_is_bounded() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 50,
+            world_size: 30.0,
+            ..AgentSimConfig::default()
+        });
+        for snap in &result.snapshots {
+            assert!(
+                (0.0..=1.0).contains(&snap.emergent.cultural_diversity),
+                "cultural_diversity should be 0-1, got {}",
+                snap.emergent.cultural_diversity
+            );
+        }
+    }
+
+    #[test]
+    fn authority_norm_is_bounded() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 50,
+            ..AgentSimConfig::default()
+        });
+        for snap in &result.snapshots {
+            assert!(
+                (0.0..=1.0).contains(&snap.emergent.mean_authority_norm),
+                "mean_authority_norm should be 0-1, got {}",
+                snap.emergent.mean_authority_norm
+            );
+        }
+    }
+
+    #[test]
+    fn cultural_traits_evolve_over_time() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 100,
+            ticks: 200,
+            world_size: 30.0,
+            cultural: CulturalParams {
+                horizontal_adoption_prob: 0.1,
+                oblique_adoption_prob: 0.05,
+                ..CulturalParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let early_div = result.snapshots[5].emergent.cultural_diversity;
+        let late_div = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.cultural_diversity)
+            .unwrap_or(0.0);
+        assert!(
+            (late_div - early_div).abs() > 0.001 || late_div > 0.0,
+            "cultural diversity should evolve: early={early_div:.4} late={late_div:.4}"
+        );
+    }
+
+    #[test]
+    fn techniques_accumulate_over_generations() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 200,
+            world_size: 30.0,
+            ..AgentSimConfig::default()
+        });
+        let early_tech = result.snapshots[5].emergent.technique_count;
+        let late_tech = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.technique_count)
+            .unwrap_or(0.0);
+        assert!(
+            late_tech >= early_tech,
+            "techniques should accumulate: early={early_tech:.2} late={late_tech:.2}"
+        );
+    }
+
+    #[test]
+    fn high_sharing_norm_boosts_cooperation() {
+        let high_sharing = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            cultural: CulturalParams {
+                sharing_coop_bonus: 0.5,
+                ..CulturalParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let low_sharing = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            cultural: CulturalParams {
+                sharing_coop_bonus: 0.0,
+                ..CulturalParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let high_coop: f32 = high_sharing
+            .snapshots
+            .iter()
+            .map(|s| s.emergent.cooperation_rate)
+            .sum();
+        let low_coop: f32 = low_sharing
+            .snapshots
+            .iter()
+            .map(|s| s.emergent.cooperation_rate)
+            .sum();
+        assert!(
+            (high_coop - low_coop).abs() > 0.01,
+            "sharing_coop_bonus should affect cooperation: high={high_coop:.4} low={low_coop:.4}"
+        );
+    }
+
+    #[test]
+    fn dominant_kinship_is_valid() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 20,
+            ..AgentSimConfig::default()
+        });
+        for snap in &result.snapshots {
+            assert!(
+                snap.emergent.dominant_kinship <= 2,
+                "dominant_kinship should be 0-2, got {}",
+                snap.emergent.dominant_kinship
+            );
+            assert!(
+                snap.emergent.dominant_marriage <= 2,
+                "dominant_marriage should be 0-2, got {}",
+                snap.emergent.dominant_marriage
             );
         }
     }

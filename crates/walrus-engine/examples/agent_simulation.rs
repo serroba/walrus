@@ -1,8 +1,8 @@
 use std::env;
 
 use walrus_engine::agents::{
-    simulate_agents, AgentSimConfig, EnergyParams, InstitutionParams, InterSocietyParams,
-    InteractionParams, LifecycleParams, MateSelectionParams, MovementParams,
+    simulate_agents, AgentSimConfig, CulturalParams, EnergyParams, InstitutionParams,
+    InterSocietyParams, InteractionParams, LifecycleParams, MateSelectionParams, MovementParams,
 };
 
 fn env_f32(key: &str, default: f32) -> f32 {
@@ -228,6 +228,51 @@ fn build_config() -> AgentSimConfig {
             ),
             raid_range: env_f32("RAID_RANGE", d.inter_society.raid_range),
         },
+        cultural: CulturalParams {
+            vertical_mutation_prob: env_f64(
+                "CULTURAL_VERTICAL_MUTATION",
+                d.cultural.vertical_mutation_prob,
+            ),
+            cultural_mutation_magnitude: env_f32(
+                "CULTURAL_MUTATION_MAG",
+                d.cultural.cultural_mutation_magnitude,
+            ),
+            horizontal_adoption_prob: env_f32(
+                "CULTURAL_HORIZONTAL_PROB",
+                d.cultural.horizontal_adoption_prob,
+            ),
+            oblique_adoption_prob: env_f32(
+                "CULTURAL_OBLIQUE_PROB",
+                d.cultural.oblique_adoption_prob,
+            ),
+            oblique_prestige_gap: env_f32("CULTURAL_OBLIQUE_GAP", d.cultural.oblique_prestige_gap),
+            authority_delegation_bonus: env_f32(
+                "AUTHORITY_DELEGATION_BONUS",
+                d.cultural.authority_delegation_bonus,
+            ),
+            trust_trade_bonus: env_f32("TRUST_TRADE_BONUS", d.cultural.trust_trade_bonus),
+            sharing_coop_bonus: env_f32("SHARING_COOP_BONUS", d.cultural.sharing_coop_bonus),
+            coercion_conflict_bonus: env_f32(
+                "COERCION_CONFLICT_BONUS",
+                d.cultural.coercion_conflict_bonus,
+            ),
+        },
+    }
+}
+
+fn kinship_name(code: u8) -> &'static str {
+    match code {
+        0 => "patrilineal",
+        1 => "matrilineal",
+        _ => "bilateral",
+    }
+}
+
+fn marriage_name(code: u8) -> &'static str {
+    match code {
+        0 => "monogamy",
+        1 => "polygyny",
+        _ => "polyandry",
     }
 }
 
@@ -254,7 +299,7 @@ fn institution_type_name(code: u8) -> &'static str {
 fn main() {
     let cfg = build_config();
 
-    eprintln!("Agent Simulation (Phase 4: Inter-Society Interactions)");
+    eprintln!("Agent Simulation (Phase 5: Cultural Transmission)");
     eprintln!(
         "  pop={} ticks={} world={} radius={}",
         cfg.initial_population, cfg.ticks, cfg.world_size, cfg.interaction_radius
@@ -280,11 +325,11 @@ fn main() {
 
     let result = simulate_agents(cfg);
 
-    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes");
+    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes,authority_norm,sharing_norm,property_norm_cultural,trust_outgroup,cultural_diversity,kinship,marriage,coercion_tolerance,techniques");
     for snap in &result.snapshots {
         let e = &snap.emergent;
         println!(
-            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{}",
+            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.2}",
             snap.tick,
             e.population_size,
             e.mean_resources,
@@ -318,6 +363,15 @@ fn main() {
             e.num_active_societies,
             e.inter_group_trade_rate,
             e.active_tributes,
+            e.mean_authority_norm,
+            e.mean_sharing_norm,
+            e.mean_property_norm,
+            e.mean_trust_outgroup,
+            e.cultural_diversity,
+            kinship_name(e.dominant_kinship),
+            marriage_name(e.dominant_marriage),
+            e.mean_coercion_tolerance,
+            e.technique_count,
         );
     }
 
