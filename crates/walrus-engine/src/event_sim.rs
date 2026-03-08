@@ -1756,6 +1756,367 @@ pub fn simulate_event_driven(cfg: EventSimConfig) -> EventSimResult {
 }
 
 // ---------------------------------------------------------------------------
+// Observer support for streaming to TUI / external consumers
+// ---------------------------------------------------------------------------
+
+/// Snapshot emitted to observers during event-driven simulation.
+/// Includes per-continent aggregation derived from agent positions.
+#[derive(Clone, Debug)]
+pub struct EventMapFrame {
+    pub time: f64,
+    pub emergent: EmergentState,
+    pub continent_populations: [u32; 4],
+    pub continent_mean_resources: [f32; 4],
+    pub continent_mean_health: [f32; 4],
+    pub continent_mean_innovation: [f32; 4],
+    pub continent_cooperation_counts: [u32; 4],
+    pub continent_conflict_counts: [u32; 4],
+    pub total_population: u32,
+    pub events_processed: u64,
+    /// Accumulated event counters for this measurement window.
+    pub raid_events: u32,
+    pub migration_events: u32,
+    pub conquest_events: u32,
+    pub tribute_total: f32,
+}
+
+/// Map an (x, y) position in the world to a continent index (0-3).
+///
+/// Layout (inspired by world geography):
+/// ```text
+///   ┌───────────┬───────────┐
+///   │ Americas  │ Eurasia   │  top half
+///   │  (2)      │  (1)      │
+///   ├───────────┼───────────┤
+///   │ Americas  │ Africa    │  bottom half
+///   │  (2)      │  (0)      │
+///   └───────────┴───────────┘
+/// ```
+/// Oceania (3) is the bottom-right corner of Eurasia's quadrant.
+pub fn continent_from_position(x: f32, y: f32, world_size: f32) -> usize {
+    let mid = world_size * 0.5;
+    let right_third = world_size * 0.7;
+    let bottom_third = world_size * 0.65;
+
+    if x < mid {
+        2 // Americas (left side)
+    } else if y < bottom_third {
+        if x > right_third && y > world_size * 0.35 {
+            3 // Oceania (right portion of upper-middle)
+        } else {
+            1 // Eurasia (right side, upper)
+        }
+    } else {
+        0 // Africa (right side, lower)
+    }
+}
+
+/// Aggregate per-continent stats from population positions.
+fn aggregate_continent_stats(pop: &Population, world_size: f32) -> ([u32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+    let mut counts = [0_u32; 4];
+    let mut res_sums = [0.0_f32; 4];
+    let mut health_sums = [0.0_f32; 4];
+    let mut innov_sums = [0.0_f32; 4];
+
+    for i in 0..pop.len() {
+        let ci = continent_from_position(pop.xs[i], pop.ys[i], world_size);
+        counts[ci] += 1;
+        res_sums[ci] += pop.resources[i];
+        health_sums[ci] += pop.healths[i];
+        innov_sums[ci] += pop.innovations[i];
+    }
+
+    let mut mean_res = [0.0_f32; 4];
+    let mut mean_health = [0.0_f32; 4];
+    let mut mean_innov = [0.0_f32; 4];
+    for ci in 0..4 {
+        if counts[ci] > 0 {
+            let n = counts[ci] as f32;
+            mean_res[ci] = res_sums[ci] / n;
+            mean_health[ci] = health_sums[ci] / n;
+            mean_innov[ci] = innov_sums[ci] / n;
+        }
+    }
+
+    (counts, mean_res, mean_health, mean_innov)
+}
+
+/// Count cooperation and conflict events per continent by examining agent positions.
+fn aggregate_continent_interactions(pop: &Population, counters: &EventCounters, world_size: f32) -> ([u32; 4], [u32; 4]) {
+    // We don't have per-agent interaction tracking, so distribute global counts
+    // proportional to population per continent.
+    let mut counts = [0_u32; 4];
+    for i in 0..pop.len() {
+        let ci = continent_from_position(pop.xs[i], pop.ys[i], world_size);
+        counts[ci] += 1;
+    }
+    let total = pop.len().max(1) as f32;
+
+    let mut coop = [0_u32; 4];
+    let mut conf = [0_u32; 4];
+    for ci in 0..4 {
+        let frac = counts[ci] as f32 / total;
+        coop[ci] = (counters.cooperation_events as f32 * frac) as u32;
+        conf[ci] = (counters.conflict_events as f32 * frac) as u32;
+    }
+    (coop, conf)
+}
+
+/// Run the event-driven simulation with an observer callback on each measurement.
+#[must_use]
+pub fn simulate_event_driven_with_observer<F>(
+    cfg: EventSimConfig,
+    mut observer: F,
+) -> EventSimResult
+where
+    F: FnMut(&EventMapFrame),
+{
+    let pop = seed_population(&cfg.agent);
+    let landscape = init_energy_landscape(&cfg.agent);
+    let grid = SpatialGrid::build(
+        &pop.xs,
+        &pop.ys,
+        cfg.agent.interaction_radius,
+        cfg.agent.world_size,
+    );
+    let mut rng = cfg.agent.seed.wrapping_add(0xE0E0).max(1);
+
+    let mut alive: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let mut id_to_index: std::collections::HashMap<u64, usize> =
+        std::collections::HashMap::new();
+    for (idx, &id) in pop.ids.iter().enumerate() {
+        alive.insert(id);
+        id_to_index.insert(id, idx);
+    }
+
+    let mut world = SimWorld {
+        pop,
+        landscape,
+        grid,
+        tributes: Vec::new(),
+        next_id: cfg.agent.initial_population as u64,
+        rng: cfg.agent.seed.wrapping_add(0xCAFE).max(1),
+        now: 0.0,
+        counters: EventCounters::default(),
+        alive,
+        id_to_index,
+    };
+
+    let mut queue = EventQueue::with_capacity(world.pop.len() * 8);
+    let mut snapshots: Vec<EventSnapshot> = Vec::new();
+
+    schedule_initial_agent_events(&mut queue, &world.pop, &mut rng, &cfg.event);
+    schedule_initial_group_events(&mut queue, &world.pop, &mut rng, &cfg.event);
+    schedule_initial_world_events(&mut queue, &cfg.event);
+
+    let mut events_processed: u64 = 0;
+    let end_time = cfg.end_time;
+    let ep = &cfg.event;
+    let world_size = cfg.agent.world_size;
+
+    while let Some(event) = queue.pop() {
+        if event.time > end_time {
+            queue.push(event);
+            break;
+        }
+
+        world.now = event.time;
+
+        if (world.pop.len() as u32) < cfg.agent.min_population {
+            break;
+        }
+
+        match event.kind {
+            EventKind::Agent { id, ref action } => {
+                if !world.alive.contains(&id) {
+                    events_processed += 1;
+                    continue;
+                }
+
+                let next_id_before = world.next_id;
+
+                match action {
+                    AgentAction::Forage => handle_forage(&mut world, id, &cfg),
+                    AgentAction::Interact => handle_interact(&mut world, id, &cfg),
+                    AgentAction::Move => handle_move(&mut world, id, &cfg),
+                    AgentAction::Reproduce => handle_reproduce(&mut world, id, &cfg),
+                    AgentAction::Age => handle_age(&mut world, id, &cfg),
+                    AgentAction::Learn => handle_learn(&mut world, id, &cfg),
+                    AgentAction::Transmit => handle_transmit(&mut world, id, &cfg),
+                }
+
+                if world.alive.contains(&id) {
+                    let rate = match action {
+                        AgentAction::Forage => ep.forage_base_rate,
+                        AgentAction::Interact => ep.interact_base_rate,
+                        AgentAction::Move => ep.move_base_rate,
+                        AgentAction::Reproduce => ep.reproduce_base_rate,
+                        AgentAction::Age => ep.age_base_rate,
+                        AgentAction::Learn => ep.learn_base_rate,
+                        AgentAction::Transmit => ep.transmit_base_rate,
+                    };
+                    queue.push(schedule_agent(
+                        world.now,
+                        id,
+                        action.clone(),
+                        rate,
+                        &mut world.rng,
+                    ));
+                }
+
+                if world.next_id > next_id_before {
+                    for new_id in next_id_before..world.next_id {
+                        schedule_new_agent_events(
+                            &mut queue,
+                            new_id,
+                            world.now,
+                            &mut world.rng,
+                            ep,
+                        );
+                    }
+                }
+            }
+            EventKind::Group {
+                kin_group,
+                ref action,
+            } => {
+                match action {
+                    GroupAction::Raid { target_group } => {
+                        handle_raid(&mut world, kin_group, *target_group, &cfg);
+                    }
+                    GroupAction::Migrate => {
+                        handle_migrate(&mut world, kin_group, &cfg);
+                        queue.push(schedule_group(
+                            world.now,
+                            kin_group,
+                            GroupAction::Migrate,
+                            ep.migrate_base_rate,
+                            &mut world.rng,
+                        ));
+
+                        let mean_aggr = kin_group_mean_aggression(&world.pop, kin_group);
+                        if mean_aggr > cfg.agent.inter_society.raid_aggression_threshold {
+                            let (ax, ay) = kin_group_centroid(&world.pop, kin_group);
+                            let mut kin_ids: Vec<u32> = Vec::new();
+                            for &kg in &world.pop.kin_groups {
+                                if !kin_ids.contains(&kg) {
+                                    kin_ids.push(kg);
+                                }
+                            }
+                            let mut best_target: Option<u32> = None;
+                            let mut best_dist = f32::MAX;
+                            for &target in &kin_ids {
+                                if target == kin_group {
+                                    continue;
+                                }
+                                let (tx, ty) = kin_group_centroid(&world.pop, target);
+                                let dist = ((ax - tx).powi(2) + (ay - ty).powi(2)).sqrt();
+                                if dist < cfg.agent.inter_society.raid_range && dist < best_dist
+                                {
+                                    best_dist = dist;
+                                    best_target = Some(target);
+                                }
+                            }
+                            if let Some(target) = best_target {
+                                if rand_f64(&mut world.rng) < f64::from(mean_aggr) {
+                                    queue.push(schedule_group(
+                                        world.now,
+                                        kin_group,
+                                        GroupAction::Raid {
+                                            target_group: target,
+                                        },
+                                        ep.raid_base_rate,
+                                        &mut world.rng,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            EventKind::World { ref action } => {
+                match action {
+                    WorldAction::RebuildSpatialIndex => {
+                        handle_rebuild_spatial_index(&mut world, &cfg);
+                        queue.push(schedule_world(
+                            world.now,
+                            WorldAction::RebuildSpatialIndex,
+                            ep.spatial_rebuild_interval,
+                        ));
+                    }
+                    WorldAction::MeasureState => {
+                        // Capture counters before measurement resets them
+                        let raid_events = world.counters.raid_events;
+                        let migration_events = world.counters.migration_events;
+                        let conquest_events = world.counters.conquest_events;
+                        let tribute_total = world.counters.tribute_total;
+
+                        handle_measure_state(&mut world, &cfg, &mut snapshots);
+
+                        // Build map frame from current population state
+                        let (cpop, cres, chealth, cinnov) =
+                            aggregate_continent_stats(&world.pop, world_size);
+                        let (ccoop, cconf) =
+                            aggregate_continent_interactions(&world.pop, &EventCounters {
+                                cooperation_events: snapshots.last().map_or(0, |s| {
+                                    (s.emergent.cooperation_rate * s.emergent.population_size as f32) as u32
+                                }),
+                                conflict_events: snapshots.last().map_or(0, |s| {
+                                    (s.emergent.conflict_rate * s.emergent.population_size as f32) as u32
+                                }),
+                                ..EventCounters::default()
+                            }, world_size);
+
+                        if let Some(snap) = snapshots.last() {
+                            let map_frame = EventMapFrame {
+                                time: snap.time,
+                                emergent: snap.emergent,
+                                continent_populations: cpop,
+                                continent_mean_resources: cres,
+                                continent_mean_health: chealth,
+                                continent_mean_innovation: cinnov,
+                                continent_cooperation_counts: ccoop,
+                                continent_conflict_counts: cconf,
+                                total_population: snap.emergent.population_size,
+                                events_processed,
+                                raid_events,
+                                migration_events,
+                                conquest_events,
+                                tribute_total,
+                            };
+                            observer(&map_frame);
+                        }
+
+                        queue.push(schedule_world(
+                            world.now,
+                            WorldAction::MeasureState,
+                            ep.measure_interval,
+                        ));
+                    }
+                    WorldAction::UpdateLandscape => {
+                        handle_update_landscape(&mut world, &cfg);
+                        handle_collect_tribute(&mut world, &cfg);
+                        queue.push(schedule_world(
+                            world.now,
+                            WorldAction::UpdateLandscape,
+                            ep.landscape_update_interval,
+                        ));
+                    }
+                }
+            }
+        }
+        events_processed += 1;
+    }
+
+    EventSimResult {
+        snapshots,
+        final_population: world.pop,
+        final_landscape: world.landscape,
+        events_processed,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
