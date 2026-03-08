@@ -5,12 +5,12 @@ on:
     branches: ["main", "codex/**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  rust-quality:
+  lint:
     runs-on: ubuntu-latest
-    env:
-      COVERAGE_ENGINE_MIN: "90"
-      COVERAGE_WORKSPACE_MIN: "80"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,20 +20,45 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Setup cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
-
       - name: Format check
         run: cargo fmt --all -- --check
 
       - name: Lint
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Test
         run: cargo test --workspace --all-targets
 
-      - name: Coverage gate (engine)
-        run: cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines $COVERAGE_ENGINE_MIN --summary-only
+  coverage:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scope: engine
+            flags: --package walrus-engine
+            min: "90"
+          - scope: workspace
+            flags: --workspace
+            min: "80"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Coverage gate (workspace)
-        run: cargo llvm-cov --workspace --all-targets --fail-under-lines $COVERAGE_WORKSPACE_MIN --summary-only
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Coverage gate (${{ matrix.scope }})
+        run: cargo llvm-cov ${{ matrix.flags }} --all-targets --fail-under-lines ${{ matrix.min }} --summary-only
