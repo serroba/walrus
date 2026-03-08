@@ -432,6 +432,8 @@ fn push_bounded(buf: &mut Vec<u64>, val: u64, max_len: usize) {
 // TUI state
 // ---------------------------------------------------------------------------
 
+const MAX_HISTORY: usize = 1000;
+
 struct TuiState {
     frame: Option<UnifiedFrame>,
     flashes: [ContinentFlash; 4],
@@ -442,6 +444,10 @@ struct TuiState {
     so_history: Vec<u64>,
     paused: bool,
     speed_ms: u64,
+    // Phase F: history + playback
+    history: Vec<UnifiedFrame>,
+    playback_cursor: Option<usize>, // None = live, Some(idx) = viewing history
+    focused_continent: Option<usize>, // None = all, Some(0..4) = focused
 }
 
 const MAX_LOG_ENTRIES: usize = 50;
@@ -458,6 +464,9 @@ impl TuiState {
             so_history: Vec::new(),
             paused: false,
             speed_ms: 80,
+            history: Vec::new(),
+            playback_cursor: None,
+            focused_continent: None,
         }
     }
 
@@ -498,7 +507,6 @@ impl TuiState {
                         CONTINENT_NAMES.get(continent).unwrap_or(&"?")), Color::White);
                 }
                 TuiEvent::Raid { count } => {
-                    // Flash all continents with some raid activity
                     for fl in &mut self.flashes {
                         fl.raid = 5;
                     }
@@ -512,6 +520,16 @@ impl TuiState {
             (frame.mean_complexity * 1000.0) as u64, 60);
         push_bounded(&mut self.so_history,
             (frame.superorganism_index * 1000.0) as u64, 60);
+
+        // Store in history ring buffer
+        self.history.push(frame.clone());
+        if self.history.len() > MAX_HISTORY {
+            self.history.remove(0);
+            // Adjust playback cursor if in playback mode
+            if let Some(ref mut cursor) = self.playback_cursor {
+                *cursor = cursor.saturating_sub(1);
+            }
+        }
 
         self.frame = Some(frame);
     }
@@ -532,6 +550,52 @@ impl TuiState {
             self.event_log.remove(0);
         }
     }
+
+    /// Returns the frame that should be displayed (live or playback).
+    fn display_frame(&self) -> Option<&UnifiedFrame> {
+        if let Some(cursor) = self.playback_cursor {
+            self.history.get(cursor)
+        } else {
+            self.frame.as_ref()
+        }
+    }
+
+    fn scrub_back(&mut self) {
+        if self.history.is_empty() { return; }
+        let cursor = match self.playback_cursor {
+            Some(c) => c.saturating_sub(1),
+            None => self.history.len().saturating_sub(2),
+        };
+        self.playback_cursor = Some(cursor);
+    }
+
+    fn scrub_forward(&mut self) {
+        if let Some(cursor) = self.playback_cursor {
+            let next = cursor + 1;
+            if next >= self.history.len() {
+                // Back to live
+                self.playback_cursor = None;
+            } else {
+                self.playback_cursor = Some(next);
+            }
+        }
+    }
+
+    fn cycle_focus(&mut self) {
+        self.focused_continent = match self.focused_continent {
+            None => Some(0),
+            Some(3) => None,
+            Some(n) => Some(n + 1),
+        };
+    }
+
+    fn save_current_frame(&self) -> Option<String> {
+        let frame = self.display_frame()?;
+        let json = serde_json::to_string_pretty(frame).ok()?;
+        let filename = format!("frame_gen{}.json", frame.generation);
+        std::fs::write(&filename, &json).ok()?;
+        Some(filename)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +603,7 @@ impl TuiState {
 // ---------------------------------------------------------------------------
 
 fn render(f: &mut Frame, state: &TuiState) {
-    let frame = match &state.frame {
+    let frame = match state.display_frame() {
         Some(fr) => fr,
         None => {
             f.render_widget(Paragraph::new("Waiting for simulation data..."), f.area());
@@ -684,6 +748,8 @@ fn render_sidebar(f: &mut Frame, area: Rect, frame: &UnifiedFrame, state: &TuiSt
 
     let mut lines: Vec<Line> = Vec::new();
 
+    let focused = state.focused_continent;
+
     for (ci, name) in CONTINENT_NAMES.iter().enumerate() {
         let c = &frame.continents[ci];
         let name_color = match ci {
@@ -694,19 +760,31 @@ fn render_sidebar(f: &mut Frame, area: Rect, frame: &UnifiedFrame, state: &TuiSt
             _ => Color::White,
         };
 
+        let is_focused = focused == Some(ci);
+        let marker = if is_focused { "> " } else { "  " };
+
         lines.push(Line::from(vec![
+            Span::raw(marker),
             Span::styled(name.to_string(), Style::default().fg(name_color).bold()),
             Span::raw(format!(" p:{} s:{}", c.population, c.society_count)),
         ]));
 
         if !c.dominant_mode.is_empty() {
             lines.push(Line::from(format!(
-                " cx:{:.2} dep:{:.2} {}", c.mean_complexity, c.depletion, c.dominant_mode
+                "   cx:{:.2} dep:{:.2} {}", c.mean_complexity, c.depletion, c.dominant_mode
             )));
         } else {
-            // Event-driven mode: show resources + interactions
             lines.push(Line::from(format!(
-                " res:{:.1} c:{}/f:{}", c.mean_resources, c.cooperation_count, c.conflict_count
+                "   res:{:.1} c:{}/f:{}", c.mean_resources, c.cooperation_count, c.conflict_count
+            )));
+        }
+
+        // Show extra detail when focused
+        if is_focused {
+            lines.push(Line::from(format!(
+                "   cap:{:.1} pop/cap:{:.2}",
+                c.carrying_capacity,
+                c.population as f64 / (c.carrying_capacity * 200.0).max(1.0),
             )));
         }
     }
@@ -742,11 +820,21 @@ fn render_sidebar(f: &mut Frame, area: Rect, frame: &UnifiedFrame, state: &TuiSt
     }
 
     lines.push(Line::from(""));
-    let status = if state.paused { "PAUSED" } else { "RUNNING" };
+
+    // Status line with playback info
+    let status = if state.playback_cursor.is_some() {
+        format!("PLAYBACK {}/{}", state.playback_cursor.map_or(0, |c| c + 1), state.history.len())
+    } else if state.paused {
+        "PAUSED".to_string()
+    } else {
+        "LIVE".to_string()
+    };
     lines.push(Line::from(vec![Span::styled(
         format!("[{status}] {:.0}ms", state.speed_ms), Style::default().fg(Color::DarkGray))]));
     lines.push(Line::from(vec![Span::styled(
         "q:quit p:pause +/-:spd", Style::default().fg(Color::DarkGray))]));
+    lines.push(Line::from(vec![Span::styled(
+        "Tab:focus </>:scrub s:save", Style::default().fg(Color::DarkGray))]));
 
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -989,6 +1077,22 @@ fn run_tui(sim_mode: SimMode) -> io::Result<()> {
                         }
                         KeyCode::Char('-') => {
                             state.speed_ms = (state.speed_ms + 20).min(500);
+                        }
+                        KeyCode::Left => state.scrub_back(),
+                        KeyCode::Right => state.scrub_forward(),
+                        KeyCode::Tab => state.cycle_focus(),
+                        KeyCode::Char('s') => {
+                            if let Some(filename) = state.save_current_frame() {
+                                state.log(
+                                    state.display_frame().map_or(0, |f| f.generation),
+                                    format!("Saved: {filename}"),
+                                    Color::White,
+                                );
+                            }
+                        }
+                        KeyCode::Home => {
+                            // Jump to live
+                            state.playback_cursor = None;
                         }
                         _ => {}
                     }
