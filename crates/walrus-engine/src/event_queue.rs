@@ -44,8 +44,6 @@ pub enum AgentAction {
 pub enum GroupAction {
     /// Launch a raid against a target kin group.
     Raid { target_group: u32 },
-    /// Collect tribute from vassals.
-    CollectTribute,
     /// Evaluate members for migration to other groups.
     Migrate,
 }
@@ -251,11 +249,12 @@ pub struct DispatchResult {
 /// enqueues them.
 ///
 /// Returns the number of events processed.
-pub fn run_event_loop<F>(
-    queue: &mut EventQueue,
-    end_time: SimTime,
-    mut handler: F,
-) -> u64
+///
+/// Note: `simulate_event_driven` uses its own inline loop instead of this
+/// function because it needs direct access to the queue for newborn agent
+/// scheduling, dead-agent skipping, and population threshold checks.  This
+/// helper is provided as a simpler building block for tests and custom loops.
+pub fn run_event_loop<F>(queue: &mut EventQueue, end_time: SimTime, mut handler: F) -> u64
 where
     F: FnMut(&Event) -> DispatchResult,
 {
@@ -366,13 +365,7 @@ mod tests {
     fn schedule_group_creates_future_event() {
         let mut rng: u64 = 42;
         let now = 5.0;
-        let event = schedule_group(
-            now,
-            3,
-            GroupAction::Raid { target_group: 1 },
-            0.5,
-            &mut rng,
-        );
+        let event = schedule_group(now, 3, GroupAction::Raid { target_group: 1 }, 0.5, &mut rng);
         assert!(event.time > now);
         match &event.kind {
             EventKind::Group { kin_group, action } => {
@@ -411,9 +404,7 @@ mod tests {
             },
         });
 
-        let processed = run_event_loop(&mut q, 7.0, |_| DispatchResult {
-            follow_ups: vec![],
-        });
+        let processed = run_event_loop(&mut q, 7.0, |_| DispatchResult { follow_ups: vec![] });
         assert_eq!(processed, 2);
         // The t=10 event should remain in the queue.
         assert_eq!(q.len(), 1);
@@ -444,9 +435,7 @@ mod tests {
                     }],
                 }
             } else {
-                DispatchResult {
-                    follow_ups: vec![],
-                }
+                DispatchResult { follow_ups: vec![] }
             }
         });
         // t=1 → follow-up at t=2, t=2 → follow-up at t=3, t=3 → no follow-up.
@@ -484,9 +473,7 @@ mod tests {
                 }
                 // Dead agent event is consumed but produces no effects.
             }
-            DispatchResult {
-                follow_ups: vec![],
-            }
+            DispatchResult { follow_ups: vec![] }
         });
 
         assert_eq!(live_processed, 1);
@@ -496,10 +483,14 @@ mod tests {
     fn high_rate_produces_short_delays() {
         let mut rng: u64 = 55555;
         let n = 1000;
-        let high_rate_mean: f64 =
-            (0..n).map(|_| exponential_delay(100.0, &mut rng)).sum::<f64>() / n as f64;
-        let low_rate_mean: f64 =
-            (0..n).map(|_| exponential_delay(0.1, &mut rng)).sum::<f64>() / n as f64;
+        let high_rate_mean: f64 = (0..n)
+            .map(|_| exponential_delay(100.0, &mut rng))
+            .sum::<f64>()
+            / n as f64;
+        let low_rate_mean: f64 = (0..n)
+            .map(|_| exponential_delay(0.1, &mut rng))
+            .sum::<f64>()
+            / n as f64;
         assert!(
             high_rate_mean < low_rate_mean,
             "high rate should produce shorter delays: high={high_rate_mean} low={low_rate_mean}"
@@ -511,13 +502,7 @@ mod tests {
         let mut q = EventQueue::with_capacity(10_000);
         let mut rng: u64 = 1234;
         for _ in 0..10_000 {
-            q.push(schedule_agent(
-                0.0,
-                0,
-                AgentAction::Move,
-                1.0,
-                &mut rng,
-            ));
+            q.push(schedule_agent(0.0, 0, AgentAction::Move, 1.0, &mut rng));
         }
         assert_eq!(q.len(), 10_000);
 

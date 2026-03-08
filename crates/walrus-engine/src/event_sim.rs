@@ -31,7 +31,10 @@ pub struct EventParams {
     pub learn_base_rate: f64,
     /// Base rate for raid attempts (per kin group).
     pub raid_base_rate: f64,
-    /// Interval between tribute collections.
+    /// Base rate for migration evaluation (per kin group).
+    pub migrate_base_rate: f64,
+    /// Interval between tribute collections (tribute now runs on the landscape
+    /// update interval via `WorldAction::UpdateLandscape`; kept for config compat).
     pub tribute_interval: f64,
     /// Interval between spatial index rebuilds.
     pub spatial_rebuild_interval: f64,
@@ -52,6 +55,7 @@ impl Default for EventParams {
             age_base_rate: 1.0,
             learn_base_rate: 1.0,
             raid_base_rate: 0.2,
+            migrate_base_rate: 0.3,
             tribute_interval: 1.0,
             spatial_rebuild_interval: 1.0,
             measure_interval: 1.0,
@@ -98,6 +102,8 @@ pub struct SimWorld {
     pub counters: EventCounters,
     /// Set of alive agent IDs for O(1) death checks.
     alive: std::collections::HashSet<u64>,
+    /// O(1) agent-id to population-index lookup.
+    id_to_index: std::collections::HashMap<u64, usize>,
 }
 
 /// Accumulated event counts between measurement snapshots.
@@ -150,20 +156,16 @@ pub struct EventSimResult {
 
 /// Find the array index of an agent by its stable ID.
 /// Returns `None` if the agent is dead (not in population).
-fn find_agent(pop: &Population, id: u64) -> Option<usize> {
-    pop.ids.iter().position(|&aid| aid == id)
+fn find_agent(world: &SimWorld, id: u64) -> Option<usize> {
+    world.id_to_index.get(&id).copied()
 }
 
 // ---------------------------------------------------------------------------
 // Event handlers
 // ---------------------------------------------------------------------------
 
-fn handle_forage(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_forage(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -200,12 +202,8 @@ fn handle_forage(
     }
 }
 
-fn handle_interact(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -283,8 +281,7 @@ fn handle_interact(
 
     if roll < coop_tendency {
         // Cooperation
-        let coop_bonus =
-            ip.coop_resource_bonus * (world.pop.cooperations[j] + my_coop) * 0.5;
+        let coop_bonus = ip.coop_resource_bonus * (world.pop.cooperations[j] + my_coop) * 0.5;
         world.pop.resources[i] = (world.pop.resources[i] + coop_bonus).max(0.0);
         world.pop.resources[j] = (world.pop.resources[j] + coop_bonus).max(0.0);
         world.pop.prestiges[i] =
@@ -307,16 +304,14 @@ fn handle_interact(
             world.pop.statuses[i] =
                 (world.pop.statuses[i] + ip.conflict_win_status).min(ip.max_status);
             world.pop.resources[j] = (world.pop.resources[j] - ip.conflict_lose_resources).max(0.0);
-            world.pop.healths[j] =
-                (world.pop.healths[j] - ip.conflict_lose_health).max(0.0);
+            world.pop.healths[j] = (world.pop.healths[j] - ip.conflict_lose_health).max(0.0);
         } else {
             // They win
             world.pop.resources[j] += ip.conflict_win_resources;
             world.pop.statuses[j] =
                 (world.pop.statuses[j] + ip.conflict_win_status).min(ip.max_status);
             world.pop.resources[i] = (world.pop.resources[i] - ip.conflict_lose_resources).max(0.0);
-            world.pop.healths[i] =
-                (world.pop.healths[i] - ip.conflict_lose_health).max(0.0);
+            world.pop.healths[i] = (world.pop.healths[i] - ip.conflict_lose_health).max(0.0);
         }
         world.counters.conflict_events += 1;
         world.counters.involuntary_transfers += 1;
@@ -326,8 +321,7 @@ fn handle_interact(
     } else {
         // Trade
         let skill_bonus = if my_skill != world.pop.skill_types[j] {
-            ip.trade_complementary_bonus
-                * (world.pop.skill_levels[i] + world.pop.skill_levels[j])
+            ip.trade_complementary_bonus * (world.pop.skill_levels[i] + world.pop.skill_levels[j])
         } else {
             ip.trade_same_bonus
         };
@@ -378,12 +372,8 @@ fn handle_interact(
     world.pop.surpluses[i] = (world.pop.resources[i] - ip.subsistence_level).max(0.0);
 }
 
-fn handle_move(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_move(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -425,12 +415,8 @@ fn handle_move(
     world.pop.ys[i] = world.pop.ys[i].clamp(0.0, world_max);
 }
 
-fn handle_reproduce(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_reproduce(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -549,8 +535,10 @@ fn handle_reproduce(
         y: world.pop.ys[i] + (rand_f64(rng) as f32 - 0.5) * lp.birth_spawn_radius,
     };
 
+    let child_index = world.pop.len();
     world.pop.push_agent(child);
     world.alive.insert(child_id);
+    world.id_to_index.insert(child_id, child_index);
 
     // Set inherited patron
     if let Some(p) = inherited_patron {
@@ -565,12 +553,8 @@ fn handle_reproduce(
     world.pop.healths[i] -= lp.birth_health_cost;
 }
 
-fn handle_age(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_age(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -609,34 +593,54 @@ fn handle_age(
         let n = world.pop.len();
         if i < n {
             world.pop.swap_remove(i);
-            // Fix references that pointed to the agent that was swapped in
             let new_n = world.pop.len();
-            for k in 0..new_n {
-                if let Some(p) = world.pop.patrons[k] {
-                    if p as usize == n - 1 {
-                        world.pop.patrons[k] = Some(i as u32);
-                    } else if p as usize >= new_n {
-                        world.pop.patrons[k] = None;
+            if i != n - 1 {
+                // The last element was swapped into position i.
+                // Fix references that pointed to the old last index (n-1).
+                // Also update the id→index map for the swapped agent.
+                if let Some(swapped_id) = world.pop.ids.get(i).copied() {
+                    world.id_to_index.insert(swapped_id, i);
+                }
+                for k in 0..new_n {
+                    if let Some(p) = world.pop.patrons[k] {
+                        if p as usize == n - 1 {
+                            world.pop.patrons[k] = Some(i as u32);
+                        } else if p as usize >= new_n {
+                            world.pop.patrons[k] = None;
+                        }
+                    }
+                    if let Some(p) = world.pop.partners[k] {
+                        if p as usize == n - 1 {
+                            world.pop.partners[k] = Some(i as u32);
+                        } else if p as usize >= new_n {
+                            world.pop.partners[k] = None;
+                        }
                     }
                 }
-                if let Some(p) = world.pop.partners[k] {
-                    if p as usize == n - 1 {
-                        world.pop.partners[k] = Some(i as u32);
-                    } else if p as usize >= new_n {
-                        world.pop.partners[k] = None;
+            } else {
+                // Dying agent was last element; swap_remove just popped it.
+                // Clear any references that pointed to the removed index.
+                for k in 0..new_n {
+                    if let Some(p) = world.pop.patrons[k] {
+                        if p as usize >= new_n {
+                            world.pop.patrons[k] = None;
+                        }
+                    }
+                    if let Some(p) = world.pop.partners[k] {
+                        if p as usize >= new_n {
+                            world.pop.partners[k] = None;
+                        }
                     }
                 }
             }
+            // Remove the dead agent from the id→index map.
+            world.id_to_index.remove(&agent_id);
         }
     }
 }
 
-fn handle_learn(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_learn(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -644,12 +648,8 @@ fn handle_learn(
     world.pop.innovations[i] = (world.pop.innovations[i] + lp.innovation_growth_rate).min(1.0);
 }
 
-fn handle_transmit(
-    world: &mut SimWorld,
-    agent_id: u64,
-    cfg: &EventSimConfig,
-) {
-    let Some(i) = find_agent(&world.pop, agent_id) else {
+fn handle_transmit(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
+    let Some(i) = find_agent(world, agent_id) else {
         return;
     };
 
@@ -711,8 +711,7 @@ fn handle_transmit(
                         (new_culture.authority_norm + peer.authority_norm) * 0.5;
                 }
                 1 => {
-                    new_culture.sharing_norm =
-                        (new_culture.sharing_norm + peer.sharing_norm) * 0.5;
+                    new_culture.sharing_norm = (new_culture.sharing_norm + peer.sharing_norm) * 0.5;
                 }
                 2 => {
                     new_culture.property_norm =
@@ -736,12 +735,7 @@ fn handle_transmit(
 // Group-level event handlers
 // ---------------------------------------------------------------------------
 
-fn handle_raid(
-    world: &mut SimWorld,
-    attacker_kin: u32,
-    target_group: u32,
-    cfg: &EventSimConfig,
-) {
+fn handle_raid(world: &mut SimWorld, attacker_kin: u32, target_group: u32, cfg: &EventSimConfig) {
     let isp = &cfg.agent.inter_society;
     let ip = &cfg.agent.interaction;
 
@@ -803,10 +797,7 @@ fn handle_raid(
     }
 }
 
-fn handle_collect_tribute(
-    world: &mut SimWorld,
-    _cfg: &EventSimConfig,
-) {
+fn handle_collect_tribute(world: &mut SimWorld, _cfg: &EventSimConfig) {
     world.tributes.retain_mut(|tr| {
         if tr.ticks_remaining == 0 {
             return false;
@@ -836,11 +827,7 @@ fn handle_collect_tribute(
     });
 }
 
-fn handle_migrate(
-    world: &mut SimWorld,
-    kin_group: u32,
-    cfg: &EventSimConfig,
-) {
+fn handle_migrate(world: &mut SimWorld, kin_group: u32, cfg: &EventSimConfig) {
     let isp = &cfg.agent.inter_society;
     let rng = &mut world.rng;
 
@@ -1093,7 +1080,7 @@ fn measure_emergent_state_from_counters(
         }
     }
 
-    let trade_total = counters.trade_events + counters.inter_group_trades;
+    let trade_total = counters.trade_events;
 
     EmergentState {
         population_size: n,
@@ -1360,13 +1347,55 @@ fn schedule_initial_agent_events(
     for idx in 0..pop.len() {
         let agent_id = pop.ids[idx];
         // Schedule all event types for each agent
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Forage, ep.forage_base_rate, rng));
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Interact, ep.interact_base_rate, rng));
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Move, ep.move_base_rate, rng));
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Reproduce, ep.reproduce_base_rate, rng));
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Age, ep.age_base_rate, rng));
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Learn, ep.learn_base_rate, rng));
-        queue.push(schedule_agent(0.0, agent_id, AgentAction::Transmit, ep.transmit_base_rate, rng));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Forage,
+            ep.forage_base_rate,
+            rng,
+        ));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Interact,
+            ep.interact_base_rate,
+            rng,
+        ));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Move,
+            ep.move_base_rate,
+            rng,
+        ));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Reproduce,
+            ep.reproduce_base_rate,
+            rng,
+        ));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Age,
+            ep.age_base_rate,
+            rng,
+        ));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Learn,
+            ep.learn_base_rate,
+            rng,
+        ));
+        queue.push(schedule_agent(
+            0.0,
+            agent_id,
+            AgentAction::Transmit,
+            ep.transmit_base_rate,
+            rng,
+        ));
     }
 }
 
@@ -1384,14 +1413,32 @@ fn schedule_initial_group_events(
         }
     }
     for &kin in &kin_ids {
-        queue.push(schedule_group(0.0, kin, GroupAction::Migrate, ep.raid_base_rate, rng));
+        queue.push(schedule_group(
+            0.0,
+            kin,
+            GroupAction::Migrate,
+            ep.migrate_base_rate,
+            rng,
+        ));
     }
 }
 
 fn schedule_initial_world_events(queue: &mut EventQueue, ep: &EventParams) {
-    queue.push(schedule_world(0.0, WorldAction::RebuildSpatialIndex, ep.spatial_rebuild_interval));
-    queue.push(schedule_world(0.0, WorldAction::MeasureState, ep.measure_interval));
-    queue.push(schedule_world(0.0, WorldAction::UpdateLandscape, ep.landscape_update_interval));
+    queue.push(schedule_world(
+        0.0,
+        WorldAction::RebuildSpatialIndex,
+        ep.spatial_rebuild_interval,
+    ));
+    queue.push(schedule_world(
+        0.0,
+        WorldAction::MeasureState,
+        ep.measure_interval,
+    ));
+    queue.push(schedule_world(
+        0.0,
+        WorldAction::UpdateLandscape,
+        ep.landscape_update_interval,
+    ));
 }
 
 fn schedule_new_agent_events(
@@ -1401,13 +1448,55 @@ fn schedule_new_agent_events(
     rng: &mut u64,
     ep: &EventParams,
 ) {
-    queue.push(schedule_agent(now, agent_id, AgentAction::Forage, ep.forage_base_rate, rng));
-    queue.push(schedule_agent(now, agent_id, AgentAction::Interact, ep.interact_base_rate, rng));
-    queue.push(schedule_agent(now, agent_id, AgentAction::Move, ep.move_base_rate, rng));
-    queue.push(schedule_agent(now, agent_id, AgentAction::Reproduce, ep.reproduce_base_rate, rng));
-    queue.push(schedule_agent(now, agent_id, AgentAction::Age, ep.age_base_rate, rng));
-    queue.push(schedule_agent(now, agent_id, AgentAction::Learn, ep.learn_base_rate, rng));
-    queue.push(schedule_agent(now, agent_id, AgentAction::Transmit, ep.transmit_base_rate, rng));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Forage,
+        ep.forage_base_rate,
+        rng,
+    ));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Interact,
+        ep.interact_base_rate,
+        rng,
+    ));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Move,
+        ep.move_base_rate,
+        rng,
+    ));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Reproduce,
+        ep.reproduce_base_rate,
+        rng,
+    ));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Age,
+        ep.age_base_rate,
+        rng,
+    ));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Learn,
+        ep.learn_base_rate,
+        rng,
+    ));
+    queue.push(schedule_agent(
+        now,
+        agent_id,
+        AgentAction::Transmit,
+        ep.transmit_base_rate,
+        rng,
+    ));
 }
 
 // ---------------------------------------------------------------------------
@@ -1428,8 +1517,10 @@ pub fn simulate_event_driven(cfg: EventSimConfig) -> EventSimResult {
     let mut rng = cfg.agent.seed.wrapping_add(0xE0E0).max(1);
 
     let mut alive: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for &id in &pop.ids {
+    let mut id_to_index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    for (idx, &id) in pop.ids.iter().enumerate() {
         alive.insert(id);
+        id_to_index.insert(id, idx);
     }
 
     let mut world = SimWorld {
@@ -1442,6 +1533,7 @@ pub fn simulate_event_driven(cfg: EventSimConfig) -> EventSimResult {
         now: 0.0,
         counters: EventCounters::default(),
         alive,
+        id_to_index,
     };
 
     let mut queue = EventQueue::with_capacity(world.pop.len() * 8);
@@ -1500,7 +1592,13 @@ pub fn simulate_event_driven(cfg: EventSimConfig) -> EventSimResult {
                         AgentAction::Learn => ep.learn_base_rate,
                         AgentAction::Transmit => ep.transmit_base_rate,
                     };
-                    queue.push(schedule_agent(world.now, id, action.clone(), rate, &mut world.rng));
+                    queue.push(schedule_agent(
+                        world.now,
+                        id,
+                        action.clone(),
+                        rate,
+                        &mut world.rng,
+                    ));
                 }
 
                 // Schedule events for any newborns
@@ -1524,15 +1622,6 @@ pub fn simulate_event_driven(cfg: EventSimConfig) -> EventSimResult {
                     GroupAction::Raid { target_group } => {
                         handle_raid(&mut world, kin_group, *target_group, &cfg);
                     }
-                    GroupAction::CollectTribute => {
-                        handle_collect_tribute(&mut world, &cfg);
-                        // Reschedule
-                        queue.push(schedule_world(
-                            world.now,
-                            WorldAction::UpdateLandscape,
-                            ep.tribute_interval,
-                        ));
-                    }
                     GroupAction::Migrate => {
                         handle_migrate(&mut world, kin_group, &cfg);
                         // Reschedule migration check for this group
@@ -1540,7 +1629,7 @@ pub fn simulate_event_driven(cfg: EventSimConfig) -> EventSimResult {
                             world.now,
                             kin_group,
                             GroupAction::Migrate,
-                            ep.raid_base_rate,
+                            ep.migrate_base_rate,
                             &mut world.rng,
                         ));
 
@@ -1737,15 +1826,25 @@ mod tests {
     }
 
     #[test]
-    fn all_agents_belong_to_valid_kin_group() {
+    fn all_patron_references_point_to_valid_indices() {
         let result = simulate_event_driven(default_event_config());
-        // Just check that kin_groups are consistent (all referenced groups have members)
         let pop = &result.final_population;
-        for &kg in &pop.kin_groups {
-            assert!(
-                pop.kin_groups.contains(&kg),
-                "kin group {kg} should exist"
-            );
+        let n = pop.len();
+        for (k, patron) in pop.patrons.iter().enumerate() {
+            if let Some(p) = patron {
+                assert!(
+                    (*p as usize) < n,
+                    "agent {k} has patron index {p} but population size is {n}"
+                );
+            }
+        }
+        for (k, partner) in pop.partners.iter().enumerate() {
+            if let Some(p) = partner {
+                assert!(
+                    (*p as usize) < n,
+                    "agent {k} has partner index {p} but population size is {n}"
+                );
+            }
         }
     }
 

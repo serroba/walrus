@@ -369,6 +369,7 @@ fn main() {
                 age_base_rate: env_f64("AGE_RATE", 1.0),
                 learn_base_rate: env_f64("LEARN_RATE", 1.0),
                 raid_base_rate: env_f64("RAID_RATE", 0.2),
+                migrate_base_rate: env_f64("MIGRATE_RATE", 0.3),
                 tribute_interval: env_f64("TRIBUTE_INTERVAL", 1.0),
                 spatial_rebuild_interval: env_f64("SPATIAL_REBUILD_INTERVAL", 1.0),
                 measure_interval: env_f64("MEASURE_INTERVAL", 1.0),
@@ -380,8 +381,10 @@ fn main() {
         eprintln!("Event-Driven Agent Simulation");
         eprintln!(
             "  pop={} end_time={:.1} world={} radius={}",
-            event_cfg.agent.initial_population, event_cfg.end_time,
-            event_cfg.agent.world_size, event_cfg.agent.interaction_radius
+            event_cfg.agent.initial_population,
+            event_cfg.end_time,
+            event_cfg.agent.world_size,
+            event_cfg.agent.interaction_radius
         );
 
         let result = simulate_event_driven(event_cfg);

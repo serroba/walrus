@@ -26,9 +26,12 @@ fn ks_two_sample(a: &mut [f64], b: &mut [f64]) -> (f64, f64) {
     let mut d_max = 0.0_f64;
 
     while ia < a.len() && ib < b.len() {
-        if a[ia] <= b[ib] {
+        if a[ia] < b[ib] {
             ia += 1;
+        } else if a[ia] > b[ib] {
+            ib += 1;
         } else {
+            ia += 1;
             ib += 1;
         }
         let d = ((ia as f64 / na) - (ib as f64 / nb)).abs();
@@ -122,8 +125,12 @@ fn run_tick_based(seeds: u32) -> MetricSet {
             metrics.conflict_rate.push(f64::from(e.conflict_rate));
             metrics.mean_health.push(f64::from(e.mean_health));
             metrics.mean_innovation.push(f64::from(e.mean_innovation));
-            metrics.cultural_diversity.push(f64::from(e.cultural_diversity));
-            metrics.hierarchy_depth.push(f64::from(e.max_hierarchy_depth));
+            metrics
+                .cultural_diversity
+                .push(f64::from(e.cultural_diversity));
+            metrics
+                .hierarchy_depth
+                .push(f64::from(e.max_hierarchy_depth));
         }
     }
     metrics
@@ -152,8 +159,12 @@ fn run_event_driven(seeds: u32) -> MetricSet {
             metrics.conflict_rate.push(f64::from(e.conflict_rate));
             metrics.mean_health.push(f64::from(e.mean_health));
             metrics.mean_innovation.push(f64::from(e.mean_innovation));
-            metrics.cultural_diversity.push(f64::from(e.cultural_diversity));
-            metrics.hierarchy_depth.push(f64::from(e.max_hierarchy_depth));
+            metrics
+                .cultural_diversity
+                .push(f64::from(e.cultural_diversity));
+            metrics
+                .hierarchy_depth
+                .push(f64::from(e.max_hierarchy_depth));
         }
     }
     metrics
@@ -215,21 +226,54 @@ fn interaction_ratios_are_preserved_across_engines() {
         let mb: f64 = b.iter().sum::<f64>() / b.len() as f64;
         eprintln!("{:<22} {:>10.3} {:>10.3}", name, ma, mb);
     };
-    print_means("final_population", &tick_metrics.final_population, &event_metrics.final_population);
+    print_means(
+        "final_population",
+        &tick_metrics.final_population,
+        &event_metrics.final_population,
+    );
     print_means("gini", &tick_metrics.gini, &event_metrics.gini);
-    print_means("cooperation_rate", &tick_metrics.cooperation_rate, &event_metrics.cooperation_rate);
-    print_means("conflict_rate", &tick_metrics.conflict_rate, &event_metrics.conflict_rate);
-    print_means("mean_health", &tick_metrics.mean_health, &event_metrics.mean_health);
-    print_means("mean_innovation", &tick_metrics.mean_innovation, &event_metrics.mean_innovation);
-    print_means("cultural_diversity", &tick_metrics.cultural_diversity, &event_metrics.cultural_diversity);
-    print_means("hierarchy_depth", &tick_metrics.hierarchy_depth, &event_metrics.hierarchy_depth);
+    print_means(
+        "cooperation_rate",
+        &tick_metrics.cooperation_rate,
+        &event_metrics.cooperation_rate,
+    );
+    print_means(
+        "conflict_rate",
+        &tick_metrics.conflict_rate,
+        &event_metrics.conflict_rate,
+    );
+    print_means(
+        "mean_health",
+        &tick_metrics.mean_health,
+        &event_metrics.mean_health,
+    );
+    print_means(
+        "mean_innovation",
+        &tick_metrics.mean_innovation,
+        &event_metrics.mean_innovation,
+    );
+    print_means(
+        "cultural_diversity",
+        &tick_metrics.cultural_diversity,
+        &event_metrics.cultural_diversity,
+    );
+    print_means(
+        "hierarchy_depth",
+        &tick_metrics.hierarchy_depth,
+        &event_metrics.hierarchy_depth,
+    );
 
-    eprintln!("\n{:<22} {:>6} {:>8} {:>6}", "KS Test", "D", "p-value", "Pass");
+    eprintln!(
+        "\n{:<22} {:>6} {:>8} {:>6}",
+        "KS Test", "D", "p-value", "Pass"
+    );
     eprintln!("{}", "-".repeat(50));
     for (name, d, p, passed) in &comparisons {
         eprintln!(
             "{:<22} {:>6.3} {:>8.4} {:>6}",
-            name, d, p,
+            name,
+            d,
+            p,
             if *passed { "OK" } else { "FAIL" }
         );
     }
@@ -257,88 +301,60 @@ fn both_engines_produce_qualitative_emergence() {
     assert!(mean(&event_metrics.gini) > 0.05, "event: gini too low");
 
     // Both produce hierarchy
-    assert!(mean(&tick_metrics.hierarchy_depth) >= 1.0, "tick: no hierarchy");
-    assert!(mean(&event_metrics.hierarchy_depth) >= 1.0, "event: no hierarchy");
+    assert!(
+        mean(&tick_metrics.hierarchy_depth) >= 1.0,
+        "tick: no hierarchy"
+    );
+    assert!(
+        mean(&event_metrics.hierarchy_depth) >= 1.0,
+        "event: no hierarchy"
+    );
 
     // Both produce cultural diversity
-    assert!(mean(&tick_metrics.cultural_diversity) > 0.1, "tick: no cultural diversity");
-    assert!(mean(&event_metrics.cultural_diversity) > 0.1, "event: no cultural diversity");
+    assert!(
+        mean(&tick_metrics.cultural_diversity) > 0.1,
+        "tick: no cultural diversity"
+    );
+    assert!(
+        mean(&event_metrics.cultural_diversity) > 0.1,
+        "event: no cultural diversity"
+    );
 
     // Both have cooperation and conflict (not all-peace or all-war)
-    assert!(mean(&tick_metrics.cooperation_rate) > 0.1, "tick: no cooperation");
-    assert!(mean(&event_metrics.cooperation_rate) > 0.1, "event: no cooperation");
-    assert!(mean(&tick_metrics.conflict_rate) > 0.05, "tick: no conflict");
-    assert!(mean(&event_metrics.conflict_rate) > 0.05, "event: no conflict");
+    assert!(
+        mean(&tick_metrics.cooperation_rate) > 0.1,
+        "tick: no cooperation"
+    );
+    assert!(
+        mean(&event_metrics.cooperation_rate) > 0.1,
+        "event: no cooperation"
+    );
+    assert!(
+        mean(&tick_metrics.conflict_rate) > 0.05,
+        "tick: no conflict"
+    );
+    assert!(
+        mean(&event_metrics.conflict_rate) > 0.05,
+        "event: no conflict"
+    );
 
     // Both show innovation growth (starting ~0.15)
-    assert!(mean(&tick_metrics.mean_innovation) > 0.15, "tick: no innovation growth");
-    assert!(mean(&event_metrics.mean_innovation) > 0.15, "event: no innovation growth");
+    assert!(
+        mean(&tick_metrics.mean_innovation) > 0.15,
+        "tick: no innovation growth"
+    );
+    assert!(
+        mean(&event_metrics.mean_innovation) > 0.15,
+        "event: no innovation growth"
+    );
 
     // Both sustain populations
-    assert!(mean(&tick_metrics.final_population) > 20.0, "tick: population collapsed");
-    assert!(mean(&event_metrics.final_population) > 20.0, "event: population collapsed");
-}
-
-/// Both engines should keep populations alive (no extinction).
-#[test]
-fn both_engines_sustain_populations() {
-    let tick_metrics = run_tick_based(SEEDS);
-    let event_metrics = run_event_driven(SEEDS);
-
-    let tick_mean_pop: f64 =
-        tick_metrics.final_population.iter().sum::<f64>() / tick_metrics.final_population.len() as f64;
-    let event_mean_pop: f64 =
-        event_metrics.final_population.iter().sum::<f64>() / event_metrics.final_population.len() as f64;
-
     assert!(
-        tick_mean_pop > 20.0,
-        "tick engine mean population should be > 20, got {tick_mean_pop:.1}"
+        mean(&tick_metrics.final_population) > 20.0,
+        "tick: population collapsed"
     );
     assert!(
-        event_mean_pop > 20.0,
-        "event engine mean population should be > 20, got {event_mean_pop:.1}"
-    );
-}
-
-/// Both engines should produce inequality (non-zero Gini).
-#[test]
-fn both_engines_produce_inequality() {
-    let tick_metrics = run_tick_based(SEEDS);
-    let event_metrics = run_event_driven(SEEDS);
-
-    let tick_mean_gini: f64 =
-        tick_metrics.gini.iter().sum::<f64>() / tick_metrics.gini.len() as f64;
-    let event_mean_gini: f64 =
-        event_metrics.gini.iter().sum::<f64>() / event_metrics.gini.len() as f64;
-
-    assert!(
-        tick_mean_gini > 0.05,
-        "tick engine should produce inequality, mean gini = {tick_mean_gini:.4}"
-    );
-    assert!(
-        event_mean_gini > 0.05,
-        "event engine should produce inequality, mean gini = {event_mean_gini:.4}"
-    );
-}
-
-/// Both engines should show innovation growth.
-#[test]
-fn both_engines_show_innovation_growth() {
-    let tick_metrics = run_tick_based(SEEDS);
-    let event_metrics = run_event_driven(SEEDS);
-
-    let tick_mean: f64 =
-        tick_metrics.mean_innovation.iter().sum::<f64>() / tick_metrics.mean_innovation.len() as f64;
-    let event_mean: f64 =
-        event_metrics.mean_innovation.iter().sum::<f64>() / event_metrics.mean_innovation.len() as f64;
-
-    // Starting innovation is ~0.15, should grow past 0.2 after 150 time units
-    assert!(
-        tick_mean > 0.15,
-        "tick engine innovation should grow, mean = {tick_mean:.4}"
-    );
-    assert!(
-        event_mean > 0.15,
-        "event engine innovation should grow, mean = {event_mean:.4}"
+        mean(&event_metrics.final_population) > 20.0,
+        "event: population collapsed"
     );
 }
