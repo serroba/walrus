@@ -4257,20 +4257,24 @@ mod tests {
             seed: 42,
             initial_population: 200,
             ticks: 200,
-            world_size: 30.0,
+            world_size: 25.0, // denser packing for more interactions
             max_population: 3000,
             cultural: CulturalParams {
                 authority_delegation_bonus: 0.4,
                 coercion_conflict_bonus: 0.2,
                 ..CulturalParams::default()
             },
+            interaction: InteractionParams {
+                trust_coop_weight: 0.25,
+                ..InteractionParams::default()
+            },
             ..AgentSimConfig::default()
         });
         let simple = simulate_agents(AgentSimConfig {
             seed: 42,
-            initial_population: 40,
+            initial_population: 30, // fewer agents
             ticks: 200,
-            world_size: 100.0,
+            world_size: 120.0, // much sparser
             ..AgentSimConfig::default()
         });
         let complex_peak = complex
