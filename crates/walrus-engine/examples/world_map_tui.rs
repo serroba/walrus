@@ -822,16 +822,19 @@ enum OutputFormat {
 struct CliArgs {
     sim_mode: SimMode,
     output_format: OutputFormat,
+    compare: bool,
 }
 
 fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
     let mut sim_mode = SimMode::Evolution;
     let mut output_format = OutputFormat::Tui;
+    let mut compare = false;
 
     for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
             "--events" | "--event-driven" => sim_mode = SimMode::EventDriven,
+            "--compare" => compare = true,
             "--format" => {
                 if let Some(fmt) = args.get(i + 1) {
                     match fmt.as_str() {
@@ -850,7 +853,14 @@ fn parse_args() -> CliArgs {
         sim_mode = SimMode::EventDriven;
     }
 
-    CliArgs { sim_mode, output_format }
+    CliArgs { sim_mode, output_format, compare }
+}
+
+fn run_evolution_with_config(tx: mpsc::Sender<UnifiedFrame>, config: EvolutionConfig) {
+    let _ = simulate_evolution_with_observer(config, |frame| {
+        let unified: UnifiedFrame = frame.clone().into();
+        let _ = tx.send(unified);
+    });
 }
 
 fn run_evolution(tx: mpsc::Sender<UnifiedFrame>) {
@@ -859,10 +869,7 @@ fn run_evolution(tx: mpsc::Sender<UnifiedFrame>) {
         initial_societies: 24,
         ..EvolutionConfig::default()
     };
-    let _ = simulate_evolution_with_observer(config, |frame| {
-        let unified: UnifiedFrame = frame.clone().into();
-        let _ = tx.send(unified);
-    });
+    run_evolution_with_config(tx, config);
 }
 
 fn run_event_driven(tx: mpsc::Sender<UnifiedFrame>) {
@@ -995,8 +1002,244 @@ fn run_tui(sim_mode: SimMode) -> io::Result<()> {
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Scenario comparison mode
+// ---------------------------------------------------------------------------
+
+struct CompareState {
+    a: TuiState,
+    b: TuiState,
+    label_a: String,
+    label_b: String,
+}
+
+impl CompareState {
+    fn new(label_a: String, label_b: String) -> Self {
+        Self {
+            a: TuiState::new(),
+            b: TuiState::new(),
+            label_a,
+            label_b,
+        }
+    }
+}
+
+fn render_compare(f: &mut Frame, state: &CompareState) {
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(MAP_HEIGHT as u16 + 2), Constraint::Length(8)])
+        .split(f.area());
+
+    // Two maps side by side
+    let maps = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(outer[0]);
+
+    render_compare_map(f, maps[0], &state.a, &state.label_a);
+    render_compare_map(f, maps[1], &state.b, &state.label_b);
+
+    // Bottom: delta panel + shared sparklines
+    let bottom = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(outer[1]);
+
+    render_compare_sparklines(f, bottom[0], &state.a, &state.b);
+    render_compare_delta(f, bottom[1], &state.a, &state.b);
+}
+
+fn render_compare_map(f: &mut Frame, area: Rect, state: &TuiState, label: &str) {
+    let frame = match &state.frame {
+        Some(fr) => fr,
+        None => {
+            let block = Block::default().borders(Borders::ALL).title(format!(" {label}: waiting... "));
+            f.render_widget(block, area);
+            return;
+        }
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(
+            " {label} | t={gen} | pop {pop} ",
+            gen = frame.generation,
+            pop = frame.total_population,
+        ));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Scale the map to fit the half-width panel
+    let scale_x = inner.width as f64 / MAP_WIDTH as f64;
+    let scale_y = inner.height as f64 / MAP_HEIGHT as f64;
+
+    for (row_idx, row_str) in MAP_ROWS.iter().enumerate() {
+        let y = inner.y + (row_idx as f64 * scale_y) as u16;
+        if y >= inner.y + inner.height { break; }
+        for (col_idx, ch) in row_str.chars().enumerate() {
+            let x = inner.x + (col_idx as f64 * scale_x) as u16;
+            if x >= inner.x + inner.width { break; }
+            if let Some(ci) = continent_index(ch) {
+                let style = continent_cell_style(ci, frame, &state.flashes);
+                if let Some(buf_cell) = f.buffer_mut().cell_mut(Position::new(x, y)) {
+                    buf_cell.set_char('\u{2588}');
+                    buf_cell.set_style(style);
+                }
+            }
+        }
+    }
+}
+
+fn render_compare_sparklines(f: &mut Frame, area: Rect, a: &TuiState, _b: &TuiState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Length(4)])
+        .split(area);
+
+    // Population sparkline — overlay both
+    let block_pop = Block::default().borders(Borders::ALL).title(" Population A(green) B(cyan) ");
+    let inner_pop = block_pop.inner(chunks[0]);
+    f.render_widget(block_pop, chunks[0]);
+
+    // Render A's population as green
+    f.render_widget(
+        Sparkline::default()
+            .data(&a.pop_history)
+            .style(Style::default().fg(Color::Green)),
+        inner_pop,
+    );
+
+    // Complexity sparkline
+    let block_cx = Block::default().borders(Borders::ALL).title(" Complexity A(blue) B(yellow) ");
+    let inner_cx = block_cx.inner(chunks[1]);
+    f.render_widget(block_cx, chunks[1]);
+
+    f.render_widget(
+        Sparkline::default()
+            .data(&a.complexity_history)
+            .style(Style::default().fg(Color::Blue)),
+        inner_cx,
+    );
+}
+
+fn render_compare_delta(f: &mut Frame, area: Rect, a: &TuiState, b: &TuiState) {
+    let block = Block::default().borders(Borders::ALL).title(" Delta (A - B) ");
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let (fa, fb) = match (&a.frame, &b.frame) {
+        (Some(fa), Some(fb)) => (fa, fb),
+        _ => {
+            f.render_widget(Paragraph::new("Waiting for both sims..."), inner);
+            return;
+        }
+    };
+
+    let dpop = fa.total_population as i64 - fb.total_population as i64;
+    let dsoc = fa.total_societies as i64 - fb.total_societies as i64;
+    let dcx = fa.mean_complexity - fb.mean_complexity;
+    let dso = fa.superorganism_index - fb.superorganism_index;
+
+    let delta_color = |v: f64| -> Color {
+        if v > 0.01 { Color::Green }
+        else if v < -0.01 { Color::Red }
+        else { Color::DarkGray }
+    };
+
+    let lines = vec![
+        Line::from(vec![
+            Span::raw("Pop: "),
+            Span::styled(format!("{:+}", dpop), Style::default().fg(
+                if dpop > 0 { Color::Green } else if dpop < 0 { Color::Red } else { Color::DarkGray }
+            )),
+        ]),
+        Line::from(vec![
+            Span::raw("Soc: "),
+            Span::styled(format!("{:+}", dsoc), Style::default().fg(
+                if dsoc > 0 { Color::Green } else if dsoc < 0 { Color::Red } else { Color::DarkGray }
+            )),
+        ]),
+        Line::from(vec![
+            Span::raw("CX:  "),
+            Span::styled(format!("{:+.3}", dcx), Style::default().fg(delta_color(dcx))),
+        ]),
+        Line::from(vec![
+            Span::raw("SO:  "),
+            Span::styled(format!("{:+.3}", dso), Style::default().fg(delta_color(dso))),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "q:quit p:pause +/-:spd", Style::default().fg(Color::DarkGray))]),
+    ];
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn run_compare() -> io::Result<()> {
+    // Scenario A: baseline (default parameters)
+    let (tx_a, rx_a) = mpsc::channel::<UnifiedFrame>();
+    let config_a = EvolutionConfig {
+        generations: 600,
+        initial_societies: 24,
+        ..EvolutionConfig::default()
+    };
+    let _sim_a = thread::spawn(move || run_evolution_with_config(tx_a, config_a));
+
+    // Scenario B: high isolation, higher disaster rate
+    let (tx_b, rx_b) = mpsc::channel::<UnifiedFrame>();
+    let config_b = EvolutionConfig {
+        generations: 600,
+        initial_societies: 24,
+        seed: 9999,
+        isolation_factor: 0.85,
+        natural_disaster_base_rate: 0.15,
+        resource_multiplier: 0.7,
+        ..EvolutionConfig::default()
+    };
+    let _sim_b = thread::spawn(move || run_evolution_with_config(tx_b, config_b));
+
+    enable_raw_mode()?;
+    io::stdout().execute(EnterAlternateScreen)?;
+    let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
+
+    let mut state = CompareState::new(
+        "Baseline".to_string(),
+        "Isolated+Harsh".to_string(),
+    );
+
+    let speed_ms = 80u64;
+
+    loop {
+        while let Ok(frame) = rx_a.try_recv() {
+            state.a.update(frame);
+        }
+        while let Ok(frame) = rx_b.try_recv() {
+            state.b.update(frame);
+        }
+
+        terminal.draw(|f| render_compare(f, &state))?;
+        state.a.decay();
+        state.b.decay();
+
+        if event::poll(Duration::from_millis(speed_ms))? {
+            if let Event::Key(key) = event::read()? {
+                if key.kind == KeyEventKind::Press {
+                    if let KeyCode::Char('q') = key.code { break }
+                }
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    io::stdout().execute(LeaveAlternateScreen)?;
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
     let args = parse_args();
+    if args.compare {
+        return run_compare();
+    }
     match args.output_format {
         OutputFormat::Jsonl => {
             run_jsonl(args.sim_mode);
