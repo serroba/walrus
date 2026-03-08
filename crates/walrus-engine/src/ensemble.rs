@@ -155,13 +155,30 @@ pub fn validation_report(
     }
 }
 
+/// Compute the p-th percentile of a sorted slice using linear interpolation.
+///
+/// This implements the "C = 1" interpolation method (same as NumPy's default and
+/// the recommendation in Hyndman & Fan, 1996, method 7), which linearly interpolates
+/// between adjacent order statistics rather than rounding to the nearest rank.
+/// This produces smoother uncertainty bands and avoids step-function artifacts
+/// when the ensemble size is small.
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     if sorted.is_empty() {
         return 0.0;
     }
+    let n = sorted.len();
+    if n == 1 {
+        return sorted[0];
+    }
     let clamped = p.clamp(0.0, 1.0);
-    let idx = ((sorted.len() - 1) as f64 * clamped).round() as usize;
-    sorted[idx]
+    let idx_f = (n - 1) as f64 * clamped;
+    let lo = idx_f.floor() as usize;
+    let hi = idx_f.ceil().min((n - 1) as f64) as usize;
+    if lo == hi {
+        return sorted[lo];
+    }
+    let frac = idx_f - lo as f64;
+    sorted[lo] * (1.0 - frac) + sorted[hi] * frac
 }
 
 fn perturb_params(
@@ -208,7 +225,7 @@ mod tests {
         baseline_parameters, ingest_owid_csv, stylized_targets, CalibrationWeights,
     };
 
-    use super::{run_ensemble, validation_report, EnsembleConfig};
+    use super::{percentile, run_ensemble, validation_report, EnsembleConfig};
 
     fn fixture(path: &str) {
         fs::write(
@@ -268,5 +285,30 @@ mod tests {
 
         assert!((0.0..=1.0).contains(&report.robustness_score));
         assert!(report.fit_population.is_finite());
+    }
+
+    #[test]
+    fn percentile_linearly_interpolates() {
+        let data = vec![10.0, 20.0, 30.0, 40.0, 50.0];
+
+        // Exact ranks
+        assert!((percentile(&data, 0.0) - 10.0).abs() < 1e-9);
+        assert!((percentile(&data, 0.25) - 20.0).abs() < 1e-9);
+        assert!((percentile(&data, 0.5) - 30.0).abs() < 1e-9);
+        assert!((percentile(&data, 1.0) - 50.0).abs() < 1e-9);
+
+        // Interpolated — p=0.125 should be halfway between 10 and 20
+        assert!((percentile(&data, 0.125) - 15.0).abs() < 1e-9);
+
+        // p=0.375 should be halfway between 20 and 30
+        assert!((percentile(&data, 0.375) - 25.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn percentile_edge_cases() {
+        assert!((percentile(&[], 0.5) - 0.0).abs() < 1e-9);
+        assert!((percentile(&[42.0], 0.0) - 42.0).abs() < 1e-9);
+        assert!((percentile(&[42.0], 1.0) - 42.0).abs() < 1e-9);
+        assert!((percentile(&[1.0, 3.0], 0.5) - 2.0).abs() < 1e-9);
     }
 }
