@@ -635,6 +635,87 @@ pub fn calibration_confidence(best_score: f64) -> CalibrationConfidence {
     }
 }
 
+/// Number of dimensions in the calibration parameter space.
+const PARAM_DIM: usize = 8;
+
+fn params_to_vec(p: CalibrationParameters) -> [f64; PARAM_DIM] {
+    [
+        p.cooperation_weight,
+        p.conflict_weight,
+        p.trade_weight,
+        p.migration_weight,
+        p.ecological_feedback,
+        p.sedentarism_population_threshold,
+        p.agriculture_population_threshold,
+        p.regression_ecological_pressure_threshold,
+    ]
+}
+
+fn vec_to_params(v: &[f64; PARAM_DIM]) -> CalibrationParameters {
+    CalibrationParameters {
+        cooperation_weight: v[0],
+        conflict_weight: v[1],
+        trade_weight: v[2],
+        migration_weight: v[3],
+        ecological_feedback: v[4],
+        sedentarism_population_threshold: v[5],
+        agriculture_population_threshold: v[6],
+        regression_ecological_pressure_threshold: v[7],
+    }
+}
+
+fn bounds_to_lo_hi(b: &ParameterBounds) -> ([f64; PARAM_DIM], [f64; PARAM_DIM]) {
+    let pairs = [
+        b.cooperation_weight,
+        b.conflict_weight,
+        b.trade_weight,
+        b.migration_weight,
+        b.ecological_feedback,
+        b.sedentarism_population_threshold,
+        b.agriculture_population_threshold,
+        b.regression_ecological_pressure_threshold,
+    ];
+    let mut lo = [0.0; PARAM_DIM];
+    let mut hi = [0.0; PARAM_DIM];
+    for (i, (a, z)) in pairs.iter().enumerate() {
+        lo[i] = a.min(*z);
+        hi[i] = a.max(*z);
+    }
+    (lo, hi)
+}
+
+/// Clamp each element of `v` to the bounds `[lo, hi]`.
+fn clamp_to_bounds(v: &mut [f64; PARAM_DIM], lo: &[f64; PARAM_DIM], hi: &[f64; PARAM_DIM]) {
+    for i in 0..PARAM_DIM {
+        v[i] = v[i].clamp(lo[i], hi[i]);
+    }
+}
+
+/// Evaluate the objective function for a parameter vector.
+fn eval_objective(
+    v: &[f64; PARAM_DIM],
+    seed: u64,
+    ticks: usize,
+    start_year: i32,
+    targets: &StylizedTargets,
+    turning_window_years: i32,
+    weights: CalibrationWeights,
+) -> (f64, BenchmarkComparison) {
+    let params = vec_to_params(v);
+    let model = simulate_series(params, seed, ticks, start_year);
+    let cmp = objective(&model, targets, turning_window_years, weights);
+    (score(&cmp), cmp)
+}
+
+/// Calibrate model parameters using the Nelder-Mead downhill simplex algorithm.
+///
+/// Nelder-Mead is a derivative-free optimizer well-suited for noisy, simulation-based
+/// objectives in moderate dimensions. It maintains a simplex of n+1 vertices in
+/// n-dimensional space and iteratively improves by reflecting, expanding, contracting,
+/// or shrinking the simplex toward lower-objective regions.
+///
+/// This replaces the previous pure random search, providing substantially faster
+/// convergence in the 8-dimensional parameter space.
 #[must_use]
 pub fn run_calibration(
     benchmarks: &CanonicalBenchmarks,
@@ -643,42 +724,267 @@ pub fn run_calibration(
 ) -> CalibrationArtifact {
     let targets = stylized_targets(benchmarks);
     let baseline = baseline_parameters();
-    let baseline_model =
-        simulate_series(baseline, config.seed, config.ticks, start_year(benchmarks));
-    let baseline_cmp = objective(
+    let sy = start_year(benchmarks);
+    let baseline_model = simulate_series(baseline, config.seed, config.ticks, sy);
+    let baseline_score = score(&objective(
         &baseline_model,
         &targets,
         config.turning_window_years,
         config.weights,
-    );
-    let baseline_score = score(&baseline_cmp);
+    ));
 
+    let (lo, hi) = bounds_to_lo_hi(&bounds);
     let mut rng = config.seed.max(1);
-    let mut best_params = baseline;
-    let mut best_cmp = baseline_cmp;
-    let mut best_score = baseline_score;
 
-    for _ in 0..config.iterations {
-        let candidate = sample_params(&bounds, &mut rng);
-        let model = simulate_series(
-            candidate,
-            lcg_next(&mut rng),
+    // --- Build initial simplex: baseline vertex + n random vertices ---
+    let n = PARAM_DIM;
+    let simplex_size = n + 1;
+    let mut simplex: Vec<[f64; PARAM_DIM]> = Vec::with_capacity(simplex_size);
+    let mut scores: Vec<f64> = Vec::with_capacity(simplex_size);
+    let mut comparisons: Vec<BenchmarkComparison> = Vec::with_capacity(simplex_size);
+
+    // Vertex 0 = baseline (clamped to bounds so the simplex stays feasible)
+    let mut baseline_vec = params_to_vec(baseline);
+    clamp_to_bounds(&mut baseline_vec, &lo, &hi);
+    let (baseline_score_clamped, baseline_cmp_clamped) = eval_objective(
+        &baseline_vec,
+        config.seed,
+        config.ticks,
+        sy,
+        &targets,
+        config.turning_window_years,
+        config.weights,
+    );
+    simplex.push(baseline_vec);
+    scores.push(baseline_score_clamped);
+    comparisons.push(baseline_cmp_clamped);
+
+    // Remaining vertices: Latin hypercube–inspired seeding for better initial coverage.
+    // Divide each dimension into n strata, shuffle, then jitter within each stratum.
+    let mut strata: Vec<Vec<usize>> = Vec::with_capacity(n);
+    for _ in 0..n {
+        let mut perm: Vec<usize> = (0..n).collect();
+        // Fisher-Yates shuffle
+        for k in (1..n).rev() {
+            let j = (lcg_next(&mut rng) as usize) % (k + 1);
+            perm.swap(k, j);
+        }
+        strata.push(perm);
+    }
+
+    for vertex_idx in 0..n {
+        let mut v = [0.0; PARAM_DIM];
+        for (dim, stratum_col) in strata.iter().enumerate().take(n) {
+            let stratum = stratum_col[vertex_idx];
+            let base_frac = (stratum as f64) / (n as f64);
+            let jitter = rand01(&mut rng) / (n as f64);
+            let frac = (base_frac + jitter).clamp(0.0, 1.0);
+            v[dim] = lo[dim] + (hi[dim] - lo[dim]) * frac;
+        }
+        clamp_to_bounds(&mut v, &lo, &hi);
+        let (s, cmp) = eval_objective(
+            &v,
+            config.seed,
             config.ticks,
-            start_year(benchmarks),
-        );
-        let cmp = objective(
-            &model,
+            sy,
             &targets,
             config.turning_window_years,
             config.weights,
         );
-        let candidate_score = score(&cmp);
-        if candidate_score < best_score {
-            best_score = candidate_score;
-            best_params = candidate;
-            best_cmp = cmp;
+        simplex.push(v);
+        scores.push(s);
+        comparisons.push(cmp);
+    }
+
+    // --- Nelder-Mead iteration ---
+    // Standard coefficients (Nelder & Mead, 1965)
+    let alpha = 1.0; // reflection
+    let gamma = 2.0; // expansion
+    let rho = 0.5; // contraction
+    let sigma = 0.5; // shrink
+
+    // We use `config.iterations` as the evaluation budget.
+    // Each NM step costs 1–2 evaluations (reflect ± expand/contract), or n+1 on shrink.
+    // NOTE: the minimum effective budget is simplex_size + 1 (= n + 2) because we need
+    // at least one iteration after building the initial simplex. Callers requesting fewer
+    // evaluations via `config.iterations` will still run at least one NM step.
+    let mut evals = simplex_size;
+    let max_evals = config.iterations.max(simplex_size + 1);
+
+    // Fixed evaluation seed ensures the objective is deterministic across all simplex
+    // comparisons, preventing noise-induced ordering instability.
+    let eval_seed = config.seed;
+
+    while evals < max_evals {
+        // Sort simplex by score (ascending = best first)
+        let mut order: Vec<usize> = (0..simplex_size).collect();
+        order.sort_by(|&a, &b| scores[a].total_cmp(&scores[b]));
+        let sorted_simplex: Vec<[f64; PARAM_DIM]> = order.iter().map(|&i| simplex[i]).collect();
+        let sorted_scores: Vec<f64> = order.iter().map(|&i| scores[i]).collect();
+        let sorted_cmps: Vec<BenchmarkComparison> =
+            order.iter().map(|&i| comparisons[i].clone()).collect();
+        simplex = sorted_simplex;
+        scores = sorted_scores;
+        comparisons = sorted_cmps;
+
+        let best_score = scores[0];
+        let worst_idx = simplex_size - 1;
+        let second_worst_idx = simplex_size - 2;
+
+        // Centroid of all vertices except the worst
+        let mut centroid = [0.0; PARAM_DIM];
+        for vertex in simplex.iter().take(worst_idx) {
+            for (d, val) in vertex.iter().enumerate().take(n) {
+                centroid[d] += val;
+            }
+        }
+        for c in centroid.iter_mut().take(n) {
+            *c /= worst_idx as f64;
+        }
+
+        // 1) Reflection
+        let mut reflected = [0.0; PARAM_DIM];
+        for d in 0..n {
+            reflected[d] = centroid[d] + alpha * (centroid[d] - simplex[worst_idx][d]);
+        }
+        clamp_to_bounds(&mut reflected, &lo, &hi);
+        let (score_r, cmp_r) = eval_objective(
+            &reflected,
+            eval_seed,
+            config.ticks,
+            sy,
+            &targets,
+            config.turning_window_years,
+            config.weights,
+        );
+        evals += 1;
+
+        if score_r < scores[second_worst_idx] && score_r >= best_score {
+            // Reflected point is better than second-worst but not best: accept reflection
+            simplex[worst_idx] = reflected;
+            scores[worst_idx] = score_r;
+            comparisons[worst_idx] = cmp_r;
+            continue;
+        }
+
+        if score_r < best_score {
+            // 2) Expansion — try going further in the reflection direction
+            if evals >= max_evals {
+                // Budget exhausted; accept reflection as-is
+                simplex[worst_idx] = reflected;
+                scores[worst_idx] = score_r;
+                comparisons[worst_idx] = cmp_r;
+                break;
+            }
+            let mut expanded = [0.0; PARAM_DIM];
+            for d in 0..n {
+                expanded[d] = centroid[d] + gamma * (reflected[d] - centroid[d]);
+            }
+            clamp_to_bounds(&mut expanded, &lo, &hi);
+            let (score_e, cmp_e) = eval_objective(
+                &expanded,
+                eval_seed,
+                config.ticks,
+                sy,
+                &targets,
+                config.turning_window_years,
+                config.weights,
+            );
+            evals += 1;
+
+            if score_e < score_r {
+                simplex[worst_idx] = expanded;
+                scores[worst_idx] = score_e;
+                comparisons[worst_idx] = cmp_e;
+            } else {
+                simplex[worst_idx] = reflected;
+                scores[worst_idx] = score_r;
+                comparisons[worst_idx] = cmp_r;
+            }
+            continue;
+        }
+
+        // 3) Contraction — reflected point is worse than second-worst
+        if evals >= max_evals {
+            break;
+        }
+        let is_outside = score_r < scores[worst_idx];
+        let mut contracted = [0.0; PARAM_DIM];
+        if is_outside {
+            // Outside contraction
+            for d in 0..n {
+                contracted[d] = centroid[d] + rho * (reflected[d] - centroid[d]);
+            }
+        } else {
+            // Inside contraction
+            for d in 0..n {
+                contracted[d] = centroid[d] + rho * (simplex[worst_idx][d] - centroid[d]);
+            }
+        }
+        clamp_to_bounds(&mut contracted, &lo, &hi);
+        let (score_c, cmp_c) = eval_objective(
+            &contracted,
+            eval_seed,
+            config.ticks,
+            sy,
+            &targets,
+            config.turning_window_years,
+            config.weights,
+        );
+        evals += 1;
+
+        // Standard Nelder-Mead acceptance:
+        //   Outside contraction: accept only if score_c <= score_r
+        //   Inside contraction:  accept only if score_c < scores[worst]
+        let accept_contraction = if is_outside {
+            score_c <= score_r
+        } else {
+            score_c < scores[worst_idx]
+        };
+
+        if accept_contraction {
+            simplex[worst_idx] = contracted;
+            scores[worst_idx] = score_c;
+            comparisons[worst_idx] = cmp_c;
+            continue;
+        }
+
+        // 4) Shrink — contract all vertices toward the best vertex
+        let best_vertex = simplex[0];
+        for i in 1..simplex_size {
+            if evals >= max_evals {
+                break;
+            }
+            for d in 0..n {
+                simplex[i][d] = best_vertex[d] + sigma * (simplex[i][d] - best_vertex[d]);
+            }
+            clamp_to_bounds(&mut simplex[i], &lo, &hi);
+            let (s, cmp) = eval_objective(
+                &simplex[i],
+                eval_seed,
+                config.ticks,
+                sy,
+                &targets,
+                config.turning_window_years,
+                config.weights,
+            );
+            scores[i] = s;
+            comparisons[i] = cmp;
+            evals += 1;
         }
     }
+
+    // Find the best vertex in the final simplex
+    let best_idx = scores
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    let best_params = vec_to_params(&simplex[best_idx]);
+    let best_score = scores[best_idx];
+    let best_cmp = comparisons[best_idx].clone();
 
     CalibrationArtifact {
         seed: config.seed,
@@ -692,28 +998,6 @@ pub fn run_calibration(
 
 fn start_year(benchmarks: &CanonicalBenchmarks) -> i32 {
     *benchmarks.population.years.first().unwrap_or(&0)
-}
-
-fn sample_params(bounds: &ParameterBounds, state: &mut u64) -> CalibrationParameters {
-    CalibrationParameters {
-        cooperation_weight: sample(bounds.cooperation_weight, state),
-        conflict_weight: sample(bounds.conflict_weight, state),
-        trade_weight: sample(bounds.trade_weight, state),
-        migration_weight: sample(bounds.migration_weight, state),
-        ecological_feedback: sample(bounds.ecological_feedback, state),
-        sedentarism_population_threshold: sample(bounds.sedentarism_population_threshold, state),
-        agriculture_population_threshold: sample(bounds.agriculture_population_threshold, state),
-        regression_ecological_pressure_threshold: sample(
-            bounds.regression_ecological_pressure_threshold,
-            state,
-        ),
-    }
-}
-
-fn sample(range: (f64, f64), state: &mut u64) -> f64 {
-    let lo = range.0.min(range.1);
-    let hi = range.0.max(range.1);
-    lo + (hi - lo) * rand01(state)
 }
 
 fn lcg_next(state: &mut u64) -> u64 {
@@ -757,9 +1041,10 @@ mod tests {
     use std::fs;
 
     use super::{
-        calibration_confidence, comparison_table, default_parameter_bounds, ingest_handy_csv,
-        ingest_maddison_csv, ingest_owid_csv, run_calibration, score, stylized_targets,
-        CalibrationConfidence, CalibrationConfig,
+        bounds_to_lo_hi, calibration_confidence, clamp_to_bounds, comparison_table,
+        default_parameter_bounds, ingest_handy_csv, ingest_maddison_csv, ingest_owid_csv,
+        params_to_vec, run_calibration, score, stylized_targets, vec_to_params,
+        CalibrationConfidence, CalibrationConfig, PARAM_DIM,
     };
 
     fn write_fixture(path: &str, header: &str) {
@@ -871,5 +1156,73 @@ mod tests {
             default_parameter_bounds(),
         );
         assert!(score(&artifact.comparison).is_finite());
+    }
+
+    #[test]
+    fn params_vec_roundtrip() {
+        let original = super::baseline_parameters();
+        let v = params_to_vec(original);
+        let recovered = vec_to_params(&v);
+        assert_eq!(original, recovered);
+    }
+
+    #[test]
+    fn bounds_conversion_preserves_order() {
+        let bounds = default_parameter_bounds();
+        let (lo, hi) = bounds_to_lo_hi(&bounds);
+        for i in 0..PARAM_DIM {
+            assert!(lo[i] <= hi[i], "lo[{i}] > hi[{i}]");
+        }
+    }
+
+    #[test]
+    fn clamp_to_bounds_clamps_correctly() {
+        let lo = [0.0; PARAM_DIM];
+        let hi = [1.0; PARAM_DIM];
+        let mut v = [-0.5; PARAM_DIM];
+        clamp_to_bounds(&mut v, &lo, &hi);
+        for val in v {
+            assert!((val - 0.0).abs() < 1e-9);
+        }
+        let mut v2 = [2.0; PARAM_DIM];
+        clamp_to_bounds(&mut v2, &lo, &hi);
+        for val in v2 {
+            assert!((val - 1.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn nelder_mead_produces_finite_results() {
+        let path = "/tmp/walrus_nm_finite_fixture.csv";
+        write_fixture(
+            path,
+            "year,population,urbanization,gdp_per_capita,primary_energy_consumption",
+        );
+        let data = ingest_owid_csv(path).unwrap_or_else(|e| panic!("fixture must parse: {e:?}"));
+        let artifact = run_calibration(
+            &data,
+            CalibrationConfig {
+                seed: 42,
+                iterations: 30,
+                ticks: 40,
+                ..CalibrationConfig::default()
+            },
+            default_parameter_bounds(),
+        );
+        assert!(artifact.best_objective.is_finite());
+        assert!(artifact.baseline_objective.is_finite());
+        // Parameters should be within bounds
+        let bounds = default_parameter_bounds();
+        let (lo, hi) = bounds_to_lo_hi(&bounds);
+        let v = params_to_vec(artifact.parameters);
+        for i in 0..PARAM_DIM {
+            assert!(
+                v[i] >= lo[i] && v[i] <= hi[i],
+                "param[{i}] = {} out of bounds [{}, {}]",
+                v[i],
+                lo[i],
+                hi[i]
+            );
+        }
     }
 }
