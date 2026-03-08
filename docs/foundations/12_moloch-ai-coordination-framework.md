@@ -104,6 +104,17 @@ This allows testing whether:
 - superorganism emergence is a robust equilibrium across broad parameter regimes or a contingent one.
 - tail risk is endogenous to game structure and coordination quality, not just random noise.
 
+## Implementation: Trust-Memory Coordination Dilemma
+
+The `coordination_failure_index` (CFI) from the conceptual framework above is now implemented in the agent simulation:
+
+- **trust_memory**: Per-agent EMA that tracks incoming cooperation from neighbors (not the agent's own cooperation rate). Initialized to 0.5 (neutral). Updated each interaction via `trust_memory = (1-alpha)*trust_memory + alpha*signal` where signal is the fraction of interactions in which neighbors cooperated toward this agent.
+- **Trust modulation**: Higher trust_memory increases cooperation tendency (`+trust_memory * trust_coop_weight`) and decreases conflict tendency (`+(1-trust_memory) * trust_coop_weight * 0.5`), creating a feedback loop: cooperation begets trust begets more cooperation, while defection erodes trust and increases conflict.
+- **coordination_failure_index**: Measured as `1 - (actual_surplus / cooperative_optimal_surplus)`, where cooperative_optimal assumes every interaction could have been cooperation. CFI=0 means perfect cooperation; CFI=1 means total coordination failure.
+- **Superorganism index**: CFI is the 9th component (weight 1.0) of the composite superorganism index, reflecting that coordination failure is a key dimension of macro-level social organization.
+
+Both the tick-based and event-driven simulation engines implement this mechanism, though with a structural difference: the tick-based engine batches trust updates while the event-driven engine updates trust immediately after each interaction.
+
 ## Boundaries
 
 1. This remains a hypothesis-testing system, not historical prediction.

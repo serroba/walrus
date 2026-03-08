@@ -267,6 +267,9 @@ pub struct Population {
     // Spatial
     pub xs: Vec<f32>,
     pub ys: Vec<f32>,
+
+    // Trust memory: EMA of incoming cooperation from neighbors (0=never cooperated with, 1=always)
+    pub trust_memory: Vec<f32>,
 }
 
 pub(crate) struct AgentInit {
@@ -314,6 +317,7 @@ impl Population {
             patron_ticks: Vec::new(),
             xs: Vec::new(),
             ys: Vec::new(),
+            trust_memory: Vec::new(),
         }
     }
 
@@ -347,6 +351,7 @@ impl Population {
         self.patron_ticks.push(0);
         self.xs.push(a.x);
         self.ys.push(a.y);
+        self.trust_memory.push(0.5); // neutral trust
     }
 
     pub(crate) fn swap_remove(&mut self, idx: usize) {
@@ -371,6 +376,7 @@ impl Population {
         self.patron_ticks.swap_remove(idx);
         self.xs.swap_remove(idx);
         self.ys.swap_remove(idx);
+        self.trust_memory.swap_remove(idx);
     }
 }
 
@@ -482,6 +488,10 @@ pub struct InteractionParams {
     pub subsistence_level: f32,
     /// Skill improvement per tick through practice.
     pub skill_practice_rate: f32,
+    /// Weight of trust_memory on cooperation tendency (higher = trust matters more).
+    pub trust_coop_weight: f32,
+    /// EMA decay for trust_memory updates (0-1; lower = longer memory).
+    pub trust_memory_decay: f32,
 }
 
 impl Default for InteractionParams {
@@ -515,6 +525,8 @@ impl Default for InteractionParams {
             max_prestige: 5.0,
             subsistence_level: 0.5,
             skill_practice_rate: 0.002,
+            trust_coop_weight: 0.25,
+            trust_memory_decay: 0.15,
         }
     }
 }
@@ -951,6 +963,11 @@ pub struct EmergentState {
     pub dominant_marriage: u8,   // 0=monogamy, 1=polygyny, 2=polyandry
     pub mean_coercion_tolerance: f32,
     pub technique_count: f32, // mean bits set in techniques
+    // Coordination dilemma
+    /// Fraction of surplus lost to coordination failure: 1 - (actual / cooperative_optimal).
+    pub coordination_failure_index: f32,
+    /// Mean trust_memory across all agents.
+    pub mean_trust: f32,
 }
 
 /// Per-tick snapshot of the simulation state.
@@ -1019,8 +1036,11 @@ pub fn superorganism_index(state: &EmergentState) -> f32 {
     let tribute = if state.tribute_flows > 0.0 { 0.5 } else { 0.0 }
         + if state.active_tributes > 0 { 0.5 } else { 0.0 };
 
+    // 9. Coordination failure (already 0-1)
+    let coordination_failure = state.coordination_failure_index;
+
     // Weighted average — hierarchy, inequality, and institution matter most
-    let weights = [2.0, 1.5, 1.0, 2.0, 1.5, 1.0, 1.0, 1.0];
+    let weights = [2.0, 1.5, 1.0, 2.0, 1.5, 1.0, 1.0, 1.0, 1.0];
     let values = [
         hierarchy,
         inequality,
@@ -1030,6 +1050,7 @@ pub fn superorganism_index(state: &EmergentState) -> f32 {
         energy,
         authority,
         tribute,
+        coordination_failure,
     ];
     let total_weight: f32 = weights.iter().sum();
     let weighted_sum: f32 = weights.iter().zip(values.iter()).map(|(w, v)| w * v).sum();
@@ -1611,6 +1632,8 @@ struct TickMeasureInput<'a> {
     institutional: &'a InstitutionalProfile,
     inter_society: &'a InterSocietySummary,
     active_tribute_count: u32,
+    total_actual_surplus: f32,
+    total_cooperative_optimal: f32,
 }
 
 fn measure_emergent_state(pop: &Population, input: &TickMeasureInput<'_>) -> EmergentState {
@@ -1751,6 +1774,17 @@ fn measure_emergent_state(pop: &Population, input: &TickMeasureInput<'_>) -> Eme
             0.0
         },
         technique_count: mean_technique_count(pop),
+        coordination_failure_index: if input.total_cooperative_optimal > 0.0 {
+            (1.0 - (input.total_actual_surplus / input.total_cooperative_optimal).min(1.0))
+                .clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        mean_trust: if n > 0 {
+            pop.trust_memory.iter().sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
     }
 }
 
@@ -1890,6 +1924,11 @@ struct InteractionEffects {
     inter_group_trades: u32,
     // Delegation choices: agent_idx -> chosen_patron_idx
     delegation_choices: Vec<(u32, u32)>,
+    // Trust-memory coordination dilemma
+    trust_signals: Vec<f32>,
+    per_agent_interactions: Vec<u32>,
+    total_actual_surplus: f32,
+    total_cooperative_optimal: f32,
 }
 
 struct AgentInteractionResult {
@@ -1907,6 +1946,10 @@ struct AgentInteractionResult {
     intra_kin_interaction: u32,
     inter_group_trade: u32,
     best_patron: Option<u32>,
+    actual_surplus: f32,
+    cooperative_optimal_surplus: f32,
+    /// Count of interactions where neighbor cooperated with this agent.
+    coop_received: u32,
 }
 
 fn compute_interactions(
@@ -1943,6 +1986,9 @@ fn compute_interactions(
             let mut inter_group_trade = 0_u32;
             let mut best_patron: Option<u32> = None;
             let mut best_patron_score = 0.0_f32;
+            let mut actual_surplus = 0.0_f32;
+            let mut cooperative_optimal_surplus = 0.0_f32;
+            let mut coop_received = 0_u32;
 
             let my_coop = pop.cooperations[i];
             let my_aggr = pop.aggressions[i];
@@ -1988,7 +2034,8 @@ fn compute_interactions(
                 let coop_tendency = my_coop * ip.coop_self_weight
                     + other_coop * ip.coop_other_weight
                     + if same_kin { ip.coop_kin_bonus } else { 0.0 }
-                    + sharing_boost;
+                    + sharing_boost
+                    + pop.trust_memory[i] * ip.trust_coop_weight;
                 let conflict_tendency = my_aggr * ip.conflict_self_weight
                     + other_aggr * ip.conflict_other_weight
                     + if !same_kin {
@@ -1996,7 +2043,8 @@ fn compute_interactions(
                     } else {
                         0.0
                     }
-                    + coercion_boost;
+                    + coercion_boost
+                    + (1.0 - pop.trust_memory[i]) * ip.trust_coop_weight * 0.5;
                 let trade_tendency = if my_skill != pop.skill_types[j] {
                     ip.trade_complementary
                 } else {
@@ -2006,6 +2054,9 @@ fn compute_interactions(
                 let total = coop_tendency + conflict_tendency + trade_tendency;
                 let roll = rand01f(&mut rng) * total;
 
+                // Track cooperative counterfactual for every interaction
+                cooperative_optimal_surplus += ip.coop_resource_bonus;
+
                 if roll < coop_tendency {
                     // Cooperation: mutual effort produces surplus for both
                     let coop_bonus = ip.coop_resource_bonus * (pop.cooperations[j] + my_coop) * 0.5;
@@ -2013,6 +2064,9 @@ fn compute_interactions(
                     prestige_delta += ip.coop_prestige_gain;
                     coop_count += 1;
                     voluntary += 1;
+                    actual_surplus += coop_bonus;
+                    // Cooperation is mutual: both i and j receive cooperation
+                    coop_received += 1;
                 } else if roll < coop_tendency + conflict_tendency {
                     // Conflict: winner takes resources, loser loses health
                     let my_power = my_status * ip.power_status_weight
@@ -2024,9 +2078,11 @@ fn compute_interactions(
                     if my_power > other_power + rand01f(&mut rng) * ip.conflict_noise {
                         res_delta += ip.conflict_win_resources;
                         status_delta += ip.conflict_win_status;
+                        actual_surplus += ip.conflict_win_resources;
                     } else {
                         res_delta -= ip.conflict_lose_resources;
                         health_delta -= ip.conflict_lose_health;
+                        actual_surplus -= ip.conflict_lose_resources;
                     }
                     conflict_count += 1;
                     involuntary += 1;
@@ -2043,6 +2099,7 @@ fn compute_interactions(
                     res_delta += skill_bonus;
                     trade_count += 1;
                     voluntary += 1;
+                    actual_surplus += skill_bonus;
                     if !same_kin {
                         inter_group_trade += 1;
                     }
@@ -2076,6 +2133,9 @@ fn compute_interactions(
                 intra_kin_interaction,
                 inter_group_trade,
                 best_patron,
+                actual_surplus,
+                cooperative_optimal_surplus,
+                coop_received,
             }
         })
         .collect();
@@ -2095,6 +2155,10 @@ fn compute_interactions(
         intra_kin_interactions: 0,
         inter_group_trades: 0,
         delegation_choices: Vec::new(),
+        trust_signals: vec![0.0; n],
+        per_agent_interactions: vec![0; n],
+        total_actual_surplus: 0.0,
+        total_cooperative_optimal: 0.0,
     };
 
     for (i, result) in per_agent.iter().enumerate() {
@@ -2111,6 +2175,14 @@ fn compute_interactions(
         effects.intra_kin_conflicts += result.intra_kin_conflict;
         effects.intra_kin_interactions += result.intra_kin_interaction;
         effects.inter_group_trades += result.inter_group_trade;
+        effects.total_actual_surplus += result.actual_surplus;
+        effects.total_cooperative_optimal += result.cooperative_optimal_surplus;
+        effects.per_agent_interactions[i] = result.interaction_count;
+        // Trust signal = fraction of interactions that were cooperation (incoming)
+        if result.interaction_count > 0 {
+            effects.trust_signals[i] =
+                result.coop_received as f32 / result.interaction_count as f32;
+        }
         if let Some(patron) = result.best_patron {
             effects.delegation_choices.push((i as u32, patron));
         }
@@ -2139,6 +2211,14 @@ fn apply_effects(pop: &mut Population, effects: &InteractionEffects, cfg: &Agent
 
         // Skill improvement through practice
         pop.skill_levels[i] = (pop.skill_levels[i] + ip.skill_practice_rate).min(1.0);
+
+        // Trust memory EMA update based on incoming cooperation from neighbors
+        if effects.per_agent_interactions[i] > 0 {
+            let alpha = ip.trust_memory_decay.clamp(0.0, 1.0);
+            pop.trust_memory[i] = ((1.0 - alpha) * pop.trust_memory[i]
+                + alpha * effects.trust_signals[i])
+                .clamp(0.0, 1.0);
+        }
     }
 
     // Increment patron tenure for agents who keep their patron
@@ -3211,6 +3291,8 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
         let conflict_events = effects.conflict_events;
         let total_interactions = effects.total_interactions;
         let inter_group_trades = effects.inter_group_trades;
+        let total_actual_surplus = effects.total_actual_surplus;
+        let total_cooperative_optimal = effects.total_cooperative_optimal;
         let trade_events = effects.trade_events;
         let institutional = detect_institutional_profile(&pop, &effects, &cfg);
         apply_effects(&mut pop, &effects, &cfg);
@@ -3249,6 +3331,8 @@ pub fn simulate_agents(cfg: AgentSimConfig) -> AgentSimResult {
                 institutional: &institutional,
                 inter_society: &inter_society_summary,
                 active_tribute_count: tributes.len() as u32,
+                total_actual_surplus,
+                total_cooperative_optimal,
             },
         );
         snapshots.push(AgentSnapshot { tick, emergent });
@@ -4133,6 +4217,8 @@ mod tests {
                 dominant_marriage: 0,
                 mean_coercion_tolerance: 0.0,
                 technique_count: 0.0,
+                coordination_failure_index: 0.0,
+                mean_trust: 0.5,
             }
         };
         assert_eq!(superorganism_index(&state), 0.0);
@@ -4200,5 +4286,141 @@ mod tests {
             assert!(!cond.label.is_empty());
             assert!(cond.config.initial_population > 0);
         }
+    }
+
+    // --- Trust-memory coordination dilemma tests ---
+
+    #[test]
+    fn trust_memory_stable_without_interactions() {
+        // Large world, sparse population -> few interactions -> trust stays near 0.5
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 50,
+            ticks: 20,
+            world_size: 500.0, // very large world -> agents rarely meet
+            ..AgentSimConfig::default()
+        });
+        let final_trust = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_trust)
+            .unwrap_or(0.0);
+        assert!(
+            (final_trust - 0.5).abs() < 0.3,
+            "mean trust should stay near 0.5 without many interactions, got {final_trust}"
+        );
+    }
+
+    #[test]
+    fn trust_memory_responds_to_cooperation() {
+        // Cooperative config vs aggressive config
+        let cooperative = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            interaction: InteractionParams {
+                coop_self_weight: 0.9,
+                coop_other_weight: 0.9,
+                coop_kin_bonus: 0.5,
+                conflict_self_weight: 0.01,
+                conflict_other_weight: 0.01,
+                ..InteractionParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let aggressive = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            interaction: InteractionParams {
+                coop_self_weight: 0.01,
+                coop_other_weight: 0.01,
+                conflict_self_weight: 0.9,
+                conflict_other_weight: 0.9,
+                conflict_stranger_bonus: 0.5,
+                ..InteractionParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let coop_trust = cooperative
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_trust)
+            .unwrap_or(0.0);
+        let aggr_trust = aggressive
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_trust)
+            .unwrap_or(1.0);
+        assert!(
+            coop_trust > aggr_trust,
+            "cooperative config should have higher trust: coop={coop_trust:.4} aggr={aggr_trust:.4}"
+        );
+    }
+
+    #[test]
+    fn coordination_failure_index_bounded() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 50,
+            world_size: 30.0,
+            ..AgentSimConfig::default()
+        });
+        for snap in &result.snapshots {
+            assert!(
+                (0.0..=1.0).contains(&snap.emergent.coordination_failure_index),
+                "CFI should be 0-1, got {}",
+                snap.emergent.coordination_failure_index
+            );
+        }
+    }
+
+    #[test]
+    fn cfi_higher_under_conflict_bias() {
+        let warlike = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            interaction: InteractionParams {
+                conflict_self_weight: 0.9,
+                conflict_other_weight: 0.9,
+                conflict_stranger_bonus: 0.5,
+                coop_self_weight: 0.01,
+                coop_other_weight: 0.01,
+                ..InteractionParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let peaceful = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            interaction: InteractionParams {
+                coop_self_weight: 0.9,
+                coop_other_weight: 0.9,
+                coop_kin_bonus: 0.5,
+                conflict_self_weight: 0.01,
+                conflict_other_weight: 0.01,
+                ..InteractionParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let war_cfi: f32 = warlike
+            .snapshots
+            .iter()
+            .map(|s| s.emergent.coordination_failure_index)
+            .sum();
+        let peace_cfi: f32 = peaceful
+            .snapshots
+            .iter()
+            .map(|s| s.emergent.coordination_failure_index)
+            .sum();
+        assert!(
+            war_cfi > peace_cfi,
+            "warlike scenario should have higher CFI: war={war_cfi:.4} peace={peace_cfi:.4}"
+        );
     }
 }

@@ -122,6 +122,8 @@ pub struct EventCounters {
     pub conquest_events: u32,
     pub tribute_total: f32,
     pub migration_events: u32,
+    pub total_actual_surplus: f32,
+    pub total_cooperative_optimal: f32,
 }
 
 impl EventCounters {
@@ -261,7 +263,8 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
     let coop_tendency = my_coop * ip.coop_self_weight
         + other_coop * ip.coop_other_weight
         + if same_kin { ip.coop_kin_bonus } else { 0.0 }
-        + sharing_boost;
+        + sharing_boost
+        + world.pop.trust_memory[i] * ip.trust_coop_weight;
     let conflict_tendency = my_aggr * ip.conflict_self_weight
         + other_aggr * ip.conflict_other_weight
         + if !same_kin {
@@ -269,7 +272,8 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
         } else {
             0.0
         }
-        + coercion_boost;
+        + coercion_boost
+        + (1.0 - world.pop.trust_memory[i]) * ip.trust_coop_weight * 0.5;
     let trade_tendency = if my_skill != world.pop.skill_types[j] {
         ip.trade_complementary
     } else {
@@ -278,6 +282,11 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
 
     let total = coop_tendency + conflict_tendency + trade_tendency;
     let roll = rand_f64(rng) as f32 * total;
+
+    // Track cooperative counterfactual for every interaction
+    world.counters.total_cooperative_optimal += ip.coop_resource_bonus;
+
+    let was_cooperation;
 
     if roll < coop_tendency {
         // Cooperation
@@ -290,6 +299,8 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
             (world.pop.prestiges[j] + ip.coop_prestige_gain).min(ip.max_prestige);
         world.counters.cooperation_events += 1;
         world.counters.voluntary_transfers += 1;
+        world.counters.total_actual_surplus += coop_bonus * 2.0; // both agents benefit
+        was_cooperation = true;
     } else if roll < coop_tendency + conflict_tendency {
         // Conflict
         let my_power = my_status * ip.power_status_weight
@@ -305,6 +316,8 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
                 (world.pop.statuses[i] + ip.conflict_win_status).min(ip.max_status);
             world.pop.resources[j] = (world.pop.resources[j] - ip.conflict_lose_resources).max(0.0);
             world.pop.healths[j] = (world.pop.healths[j] - ip.conflict_lose_health).max(0.0);
+            world.counters.total_actual_surplus +=
+                ip.conflict_win_resources - ip.conflict_lose_resources;
         } else {
             // They win
             world.pop.resources[j] += ip.conflict_win_resources;
@@ -312,12 +325,15 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
                 (world.pop.statuses[j] + ip.conflict_win_status).min(ip.max_status);
             world.pop.resources[i] = (world.pop.resources[i] - ip.conflict_lose_resources).max(0.0);
             world.pop.healths[i] = (world.pop.healths[i] - ip.conflict_lose_health).max(0.0);
+            world.counters.total_actual_surplus +=
+                ip.conflict_win_resources - ip.conflict_lose_resources;
         }
         world.counters.conflict_events += 1;
         world.counters.involuntary_transfers += 1;
         if same_kin {
             world.counters.intra_kin_conflicts += 1;
         }
+        was_cooperation = false;
     } else {
         // Trade
         let skill_bonus = if my_skill != world.pop.skill_types[j] {
@@ -329,9 +345,21 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
         world.pop.resources[j] += skill_bonus;
         world.counters.trade_events += 1;
         world.counters.voluntary_transfers += 1;
+        world.counters.total_actual_surplus += skill_bonus * 2.0; // both agents benefit
         if !same_kin {
             world.counters.inter_group_trades += 1;
         }
+        was_cooperation = false;
+    }
+
+    // Update trust_memory for both agents based on whether this interaction was cooperation
+    {
+        let alpha = ip.trust_memory_decay.clamp(0.0, 1.0);
+        let coop_signal = if was_cooperation { 1.0_f32 } else { 0.0 };
+        world.pop.trust_memory[i] =
+            ((1.0 - alpha) * world.pop.trust_memory[i] + alpha * coop_signal).clamp(0.0, 1.0);
+        world.pop.trust_memory[j] =
+            ((1.0 - alpha) * world.pop.trust_memory[j] + alpha * coop_signal).clamp(0.0, 1.0);
     }
 
     // Delegation: consider this neighbor as patron
@@ -1210,6 +1238,17 @@ fn measure_emergent_state_from_counters(
             0.0
         },
         technique_count: mean_technique_count(pop),
+        coordination_failure_index: if counters.total_cooperative_optimal > 0.0 {
+            (1.0 - (counters.total_actual_surplus / counters.total_cooperative_optimal).min(1.0))
+                .clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
+        mean_trust: if n > 0 {
+            pop.trust_memory.iter().sum::<f32>() / n as f32
+        } else {
+            0.0
+        },
     }
 }
 
