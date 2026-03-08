@@ -74,7 +74,7 @@ const CONTINENT_NAMES: [&str; 4] = ["Africa", "Eurasia", "Americas", "Oceania"];
 // Unified frame — abstracts over evolution vs event-driven simulation
 // ---------------------------------------------------------------------------
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 struct ContinentStats {
     population: u64,
     society_count: usize,
@@ -87,10 +87,9 @@ struct ContinentStats {
     conflict_count: u32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 struct UnifiedFrame {
     generation: u32,
-    #[allow(dead_code)]
     time: f64,
     total_population: u64,
     total_societies: usize,
@@ -107,7 +106,7 @@ struct UnifiedFrame {
     mode_label: &'static str,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 enum TuiEvent {
     Disaster { continent: usize, severity: f64 },
     Pandemic { continent: usize, severity: f64 },
@@ -814,17 +813,44 @@ enum SimMode {
     EventDriven,
 }
 
-fn parse_mode() -> SimMode {
-    for arg in std::env::args() {
-        if arg == "--events" || arg == "--event-driven" {
-            return SimMode::EventDriven;
+enum OutputFormat {
+    Tui,
+    Jsonl,
+    Summary,
+}
+
+struct CliArgs {
+    sim_mode: SimMode,
+    output_format: OutputFormat,
+}
+
+fn parse_args() -> CliArgs {
+    let args: Vec<String> = std::env::args().collect();
+    let mut sim_mode = SimMode::Evolution;
+    let mut output_format = OutputFormat::Tui;
+
+    for (i, arg) in args.iter().enumerate() {
+        match arg.as_str() {
+            "--events" | "--event-driven" => sim_mode = SimMode::EventDriven,
+            "--format" => {
+                if let Some(fmt) = args.get(i + 1) {
+                    match fmt.as_str() {
+                        "jsonl" | "json" => output_format = OutputFormat::Jsonl,
+                        "summary" | "text" => output_format = OutputFormat::Summary,
+                        "tui" => output_format = OutputFormat::Tui,
+                        _ => eprintln!("Unknown format '{}', using tui", fmt),
+                    }
+                }
+            }
+            _ => {}
         }
     }
-    // Also check env var
+
     if std::env::var("EVENT_DRIVEN").unwrap_or_default() == "true" {
-        return SimMode::EventDriven;
+        sim_mode = SimMode::EventDriven;
     }
-    SimMode::Evolution
+
+    CliArgs { sim_mode, output_format }
 }
 
 fn run_evolution(tx: mpsc::Sender<UnifiedFrame>) {
@@ -862,11 +888,71 @@ fn run_event_driven(tx: mpsc::Sender<UnifiedFrame>) {
 // Main
 // ---------------------------------------------------------------------------
 
-fn main() -> io::Result<()> {
-    let mode = parse_mode();
+fn run_jsonl(sim_mode: SimMode) {
+    use std::io::Write;
+    let (tx, rx) = mpsc::channel::<UnifiedFrame>();
+    let stdout = io::stdout();
+
+    let _sim_handle = thread::spawn(move || match sim_mode {
+        SimMode::Evolution => run_evolution(tx),
+        SimMode::EventDriven => run_event_driven(tx),
+    });
+
+    let mut out = io::BufWriter::new(stdout.lock());
+    while let Ok(frame) = rx.recv() {
+        if let Ok(json) = serde_json::to_string(&frame) {
+            let _ = writeln!(out, "{json}");
+            let _ = out.flush();
+        }
+    }
+}
+
+fn run_summary(sim_mode: SimMode) {
+    use std::io::Write;
+    let (tx, rx) = mpsc::channel::<UnifiedFrame>();
+    let stdout = io::stdout();
+
+    let _sim_handle = thread::spawn(move || match sim_mode {
+        SimMode::Evolution => run_evolution(tx),
+        SimMode::EventDriven => run_event_driven(tx),
+    });
+
+    let mut out = io::BufWriter::new(stdout.lock());
+    while let Ok(frame) = rx.recv() {
+        let continent_summary: String = frame.continents.iter().enumerate()
+            .map(|(ci, c)| format!(
+                "{}:p={}/cx={:.2}",
+                CONTINENT_NAMES[ci], c.population, c.mean_complexity,
+            ))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let event_counts = if !frame.events.is_empty() {
+            format!(" events={}", frame.events.len())
+        } else {
+            String::new()
+        };
+
+        let _ = writeln!(
+            out,
+            "t={:<5} pop={:<8} soc={:<3} SO={:.3} CX={:.3} {} {}{}",
+            frame.generation,
+            frame.total_population,
+            frame.total_societies,
+            frame.superorganism_index,
+            frame.mean_complexity,
+            frame.mode_label,
+            continent_summary,
+            event_counts,
+        );
+        let _ = out.flush();
+    }
+}
+
+fn run_tui(sim_mode: SimMode) -> io::Result<()> {
     let (tx, rx) = mpsc::channel::<UnifiedFrame>();
 
-    let _sim_handle = thread::spawn(move || match mode {
+    let _sim_handle = thread::spawn(move || match sim_mode {
         SimMode::Evolution => run_evolution(tx),
         SimMode::EventDriven => run_event_driven(tx),
     });
@@ -907,4 +993,19 @@ fn main() -> io::Result<()> {
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
     Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let args = parse_args();
+    match args.output_format {
+        OutputFormat::Jsonl => {
+            run_jsonl(args.sim_mode);
+            Ok(())
+        }
+        OutputFormat::Summary => {
+            run_summary(args.sim_mode);
+            Ok(())
+        }
+        OutputFormat::Tui => run_tui(args.sim_mode),
+    }
 }
