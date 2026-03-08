@@ -331,7 +331,14 @@ fn detect_emergence(population: &Population) -> EmergenceOrderParameters {
 
 ---
 
-## Phase 4: Inter-Society Interactions
+## Phase 4: Inter-Society Interactions ✅ COMPLETE
+
+> **Status (2026-03-08):** Implemented in `agents.rs` with `InterSocietyParams`,
+> `TributeRelation`, `InterSocietySummary`, and `inter_society_tick()`. Mechanics:
+> kin-group raids (power-based with aggression threshold), conquest triggering
+> tribute relations, tribute collection/distribution per tick, resource-stress
+> migration between kin groups, inter-group trade rate tracking. 5 new tests,
+> 7 new CSV output columns, all env-configurable via `agent_simulation` example.
 
 **Goal:** Societies don't just evolve in isolation on continents. They
 trade, raid, conquer, form alliances, and exchange people.

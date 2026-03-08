@@ -1,8 +1,8 @@
 use std::env;
 
 use walrus_engine::agents::{
-    simulate_agents, AgentSimConfig, EnergyParams, InstitutionParams, InteractionParams,
-    LifecycleParams, MateSelectionParams, MovementParams,
+    simulate_agents, AgentSimConfig, EnergyParams, InstitutionParams, InterSocietyParams,
+    InteractionParams, LifecycleParams, MateSelectionParams, MovementParams,
 };
 
 fn env_f32(key: &str, default: f32) -> f32 {
@@ -198,6 +198,36 @@ fn build_config() -> AgentSimConfig {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(d.institution.patron_inheritance),
         },
+        inter_society: InterSocietyParams {
+            min_raid_warriors: env_u32("MIN_RAID_WARRIORS", d.inter_society.min_raid_warriors),
+            raid_aggression_threshold: env_f32(
+                "RAID_AGGRESSION_THRESHOLD",
+                d.inter_society.raid_aggression_threshold,
+            ),
+            raid_loot_per_warrior: env_f32(
+                "RAID_LOOT_PER_WARRIOR",
+                d.inter_society.raid_loot_per_warrior,
+            ),
+            raid_damage_per_warrior: env_f32(
+                "RAID_DAMAGE_PER_WARRIOR",
+                d.inter_society.raid_damage_per_warrior,
+            ),
+            conquest_power_ratio: env_f32(
+                "CONQUEST_POWER_RATIO",
+                d.inter_society.conquest_power_ratio,
+            ),
+            tribute_rate: env_f32("TRIBUTE_RATE", d.inter_society.tribute_rate),
+            tribute_duration: env_u32("TRIBUTE_DURATION", d.inter_society.tribute_duration),
+            migration_resource_threshold: env_f32(
+                "MIGRATION_RESOURCE_THRESHOLD",
+                d.inter_society.migration_resource_threshold,
+            ),
+            migration_probability: env_f32(
+                "MIGRATION_PROBABILITY",
+                d.inter_society.migration_probability,
+            ),
+            raid_range: env_f32("RAID_RANGE", d.inter_society.raid_range),
+        },
     }
 }
 
@@ -224,7 +254,7 @@ fn institution_type_name(code: u8) -> &'static str {
 fn main() {
     let cfg = build_config();
 
-    eprintln!("Agent Simulation (Phase 3: Emergent Institutions)");
+    eprintln!("Agent Simulation (Phase 4: Inter-Society Interactions)");
     eprintln!(
         "  pop={} ticks={} world={} radius={}",
         cfg.initial_population, cfg.ticks, cfg.world_size, cfg.interaction_radius
@@ -250,11 +280,11 @@ fn main() {
 
     let result = simulate_agents(cfg);
 
-    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure");
+    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes");
     for snap in &result.snapshots {
         let e = &snap.emergent;
         println!(
-            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1}",
+            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{}",
             snap.tick,
             e.population_size,
             e.mean_resources,
@@ -281,6 +311,13 @@ fn main() {
             e.patron_count,
             e.recognized_leaders,
             e.mean_patron_tenure,
+            e.raid_events,
+            e.conquest_events,
+            e.tribute_flows,
+            e.migration_events,
+            e.num_active_societies,
+            e.inter_group_trade_rate,
+            e.active_tributes,
         );
     }
 
