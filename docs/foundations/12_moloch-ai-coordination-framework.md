@@ -76,30 +76,30 @@ The first concrete coupling between this framework and the agent simulation is n
 
 ### Mechanism
 
-Each agent carries a `trust_memory` value in [0, 1] — an exponential moving average of cooperation received from neighbors:
+Each agent carries a `trust_memory` value in [0, 1] — an exponential moving average of the agent's own cooperation rate:
 
 `trust_memory_{t+1} = (1 - alpha) * trust_memory_t + alpha * observed_coop_rate`
 
-where `alpha = trust_memory_decay` (default 0.15) and `observed_coop_rate` is the fraction of this tick's interactions that were cooperative.
+where `alpha = trust_memory_decay` (default 0.15, clamped to [0, 1]) and `observed_coop_rate` is the fraction of this tick's agent–neighbor (directed) interactions in which the agent chose to cooperate. Agents with zero interactions in a tick retain their previous trust_memory unchanged.
 
 Trust memory modulates cooperation tendency:
 
 `coop_tendency += trust_memory * trust_coop_weight`
 `conflict_tendency += (1 - trust_memory) * trust_coop_weight * 0.5`
 
-This creates a genuine **coordination dilemma**: when trust is low, agents rationally choose conflict even when mutual cooperation would yield higher surplus. The resulting defection further erodes trust, producing the self-reinforcing Moloch dynamic.
+This creates a genuine **coordination dilemma**: when trust is low, agents rationally overweight the risk of being exploited and shift toward conflict, even when mutual cooperation is potentially Pareto-improving. The resulting defection further erodes trust, producing the self-reinforcing Moloch dynamic.
 
 ### Coordination Failure Index
 
-For each pairwise interaction, we compute:
+For each agent–neighbor (directed) interaction, we compute:
 - **actual surplus**: the resource delta from the chosen action (cooperation, conflict, or trade)
-- **cooperative counterfactual**: the surplus that would result if that interaction were cooperative
+- **cooperative optimal**: `coop_resource_bonus` — the maximum surplus achievable if both agents cooperated with full commitment (trait = 1.0). This fixed upper bound ensures the ratio stays meaningful regardless of agent traits.
 
 The **coordination failure index** is:
 
-`CFI_t = 1 - (sum_actual_surplus / sum_cooperative_optimal)`
+`CFI_t = 1 - min(sum_actual_surplus / sum_cooperative_optimal, 1.0)`
 
-Clamped to [0, 1]. CFI = 0 means all interactions achieve cooperative optimum. CFI = 1 means total coordination failure. This feeds into the superorganism index as a 9th component (weight 1.0), capturing the game-theoretic lock-in dimension.
+Clamped to [0, 1]. CFI = 0 means all interactions achieve the cooperative optimal. CFI = 1 means total coordination failure. This feeds into the superorganism index as a 9th component (weight 1.0), capturing the game-theoretic lock-in dimension.
 
 ### Reinforcing Loop (R8): Trust-Defection Spiral
 
