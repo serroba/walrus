@@ -56,6 +56,12 @@ Societies under stress are more likely to initiate wars. War winners gain resour
 
 Under stress, governance shifts toward extractive policies which further degrade the environment, creating a self-reinforcing collapse pathway.
 
+### R8: Trust-Defection Spiral (Coordination Failure)
+
+`trust ↓ -> cooperation tendency ↓ -> conflict ↑ -> observed cooperation ↓ -> trust ↓`
+
+Agents with low trust_memory rationally choose conflict even when mutual cooperation yields higher surplus. The resulting defection further erodes trust across neighbors. This is the micro-foundation for the Moloch/multipolar-trap dynamic. The coordination failure index (CFI) measures the aggregate surplus gap between actual outcomes and cooperative optimum.
+
 ## Balancing Loops (B)
 
 ### B1: Ecological Constraint Loop

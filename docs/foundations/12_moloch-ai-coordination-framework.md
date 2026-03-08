@@ -70,9 +70,72 @@ This document defines how to include those dynamics explicitly.
 - health/infrastructure/production impacts,
 - shock-to-governance and shock-to-trust couplings.
 
+## Implemented: Trust-Memory Coordination Dilemma
+
+The first concrete coupling between this framework and the agent simulation is now implemented via **trust-modulated cooperation with coordination failure measurement**.
+
+### Mechanism
+
+Each agent carries a `trust_memory` value in [0, 1] — an exponential moving average of cooperation received from neighbors:
+
+`trust_memory_{t+1} = (1 - alpha) * trust_memory_t + alpha * observed_coop_rate`
+
+where `alpha = trust_memory_decay` (default 0.15) and `observed_coop_rate` is the fraction of this tick's interactions that were cooperative.
+
+Trust memory modulates cooperation tendency:
+
+`coop_tendency += trust_memory * trust_coop_weight`
+`conflict_tendency += (1 - trust_memory) * trust_coop_weight * 0.5`
+
+This creates a genuine **coordination dilemma**: when trust is low, agents rationally choose conflict even when mutual cooperation would yield higher surplus. The resulting defection further erodes trust, producing the self-reinforcing Moloch dynamic.
+
+### Coordination Failure Index
+
+For each pairwise interaction, we compute:
+- **actual surplus**: the resource delta from the chosen action (cooperation, conflict, or trade)
+- **cooperative counterfactual**: the surplus that would result if that interaction were cooperative
+
+The **coordination failure index** is:
+
+`CFI_t = 1 - (sum_actual_surplus / sum_cooperative_optimal)`
+
+Clamped to [0, 1]. CFI = 0 means all interactions achieve cooperative optimum. CFI = 1 means total coordination failure. This feeds into the superorganism index as a 9th component (weight 1.0), capturing the game-theoretic lock-in dimension.
+
+### Reinforcing Loop (R8): Trust-Defection Spiral
+
+`trust ↓ -> cooperation ↓ -> conflict ↑ -> trust ↓`
+
+This is the micro-foundation for the Moloch dynamic. Under stress (ecological pressure, resource scarcity), conflict increases, trust erodes, and agents are locked into defection even when cooperation is Pareto-improving. The superorganism pathway emerges when hierarchical coercion (patron-client delegation) substitutes for voluntary cooperation.
+
+### Falsifiability
+
+The trust-memory model is wrong if:
+- Populations with identical initial conditions but different initial trust levels converge to the same coordination failure index within 100 ticks (trust memory would be irrelevant).
+- Sustained high cooperation does not raise mean trust (the EMA would be broken).
+- Removing trust modulation (`trust_coop_weight = 0`) does not change coordination failure dynamics at all (the mechanism would be inert).
+
+### Code Anchors
+
+- Trust memory field: `Population.trust_memory` in `agents.rs`
+- Cooperation modulation: `compute_interactions()` in `agents.rs`
+- Trust EMA update: `apply_effects()` in `agents.rs`
+- CFI computation: `measure_emergent_state()` in `agents.rs`
+- Superorganism integration: `superorganism_index()` in `agents.rs`
+
+### Configurable Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `trust_coop_weight` | 0.25 | How strongly trust_memory affects cooperation vs conflict tendency |
+| `trust_memory_decay` | 0.15 | EMA decay rate (lower = longer memory, more path-dependent) |
+
 ## New State Variables to Track
 
-- `coordination_failure_index`
+### Implemented
+- `coordination_failure_index` — fraction of surplus lost to non-cooperative interactions (0-1)
+- `mean_trust` — population-level mean trust_memory (cooperation expectation)
+
+### Future (conceptual)
 - `arms_race_intensity`
 - `externality_burden`
 - `governance_capacity`
