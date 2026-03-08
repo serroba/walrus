@@ -3,6 +3,8 @@
 pub mod agents;
 pub mod calibration;
 pub mod ensemble;
+pub mod event_queue;
+pub mod event_sim;
 pub mod evolution;
 
 /// Historical subsistence regimes used for scenario transitions.

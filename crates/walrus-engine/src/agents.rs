@@ -187,9 +187,9 @@ pub struct EnergyCell {
 #[derive(Clone, Debug)]
 pub struct EnergyLandscape {
     pub cells: Vec<EnergyCell>,
-    cols: usize,
-    rows: usize,
-    cell_size: f32,
+    pub(crate) cols: usize,
+    pub(crate) rows: usize,
+    pub(crate) cell_size: f32,
 }
 
 impl EnergyLandscape {
@@ -269,25 +269,25 @@ pub struct Population {
     pub ys: Vec<f32>,
 }
 
-struct AgentInit {
-    id: u64,
-    sex: Sex,
-    age: u16,
-    fertility: f32,
-    health: f32,
-    skill_type: SkillType,
-    skill_level: f32,
-    status: f32,
-    prestige: f32,
-    aggression: f32,
-    cooperation: f32,
-    resources: f32,
-    surplus: f32,
-    culture: Culture,
-    innovation: f32,
-    kin_group: u32,
-    x: f32,
-    y: f32,
+pub(crate) struct AgentInit {
+    pub(crate) id: u64,
+    pub(crate) sex: Sex,
+    pub(crate) age: u16,
+    pub(crate) fertility: f32,
+    pub(crate) health: f32,
+    pub(crate) skill_type: SkillType,
+    pub(crate) skill_level: f32,
+    pub(crate) status: f32,
+    pub(crate) prestige: f32,
+    pub(crate) aggression: f32,
+    pub(crate) cooperation: f32,
+    pub(crate) resources: f32,
+    pub(crate) surplus: f32,
+    pub(crate) culture: Culture,
+    pub(crate) innovation: f32,
+    pub(crate) kin_group: u32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
 }
 
 impl Population {
@@ -325,7 +325,7 @@ impl Population {
         self.ids.is_empty()
     }
 
-    fn push_agent(&mut self, a: AgentInit) {
+    pub(crate) fn push_agent(&mut self, a: AgentInit) {
         self.ids.push(a.id);
         self.sexes.push(a.sex);
         self.ages.push(a.age);
@@ -349,7 +349,7 @@ impl Population {
         self.ys.push(a.y);
     }
 
-    fn swap_remove(&mut self, idx: usize) {
+    pub(crate) fn swap_remove(&mut self, idx: usize) {
         self.ids.swap_remove(idx);
         self.sexes.swap_remove(idx);
         self.ages.swap_remove(idx);
@@ -375,15 +375,15 @@ impl Population {
 }
 
 /// Spatial hash grid for O(1) neighbor queries.
-struct SpatialGrid {
+pub(crate) struct SpatialGrid {
     cells: Vec<Vec<u32>>,
     cols: usize,
     rows: usize,
-    cell_size: f32,
+    pub(crate) cell_size: f32,
 }
 
 impl SpatialGrid {
-    fn build(xs: &[f32], ys: &[f32], cell_size: f32, world_size: f32) -> Self {
+    pub(crate) fn build(xs: &[f32], ys: &[f32], cell_size: f32, world_size: f32) -> Self {
         let cols = (world_size / cell_size).ceil() as usize + 1;
         let rows = cols;
         let mut cells = vec![Vec::new(); cols * rows];
@@ -401,7 +401,7 @@ impl SpatialGrid {
         }
     }
 
-    fn neighbors_of(&self, x: f32, y: f32) -> Vec<u32> {
+    pub(crate) fn neighbors_of(&self, x: f32, y: f32) -> Vec<u32> {
         let cx = (x / self.cell_size).floor() as isize;
         let cy = (y / self.cell_size).floor() as isize;
         let mut result = Vec::new();
@@ -1365,7 +1365,7 @@ pub fn run_agent_convergence_experiment(
 // Measurement functions
 // ---------------------------------------------------------------------------
 
-fn measure_gini(resources: &[f32]) -> f32 {
+pub(crate) fn measure_gini(resources: &[f32]) -> f32 {
     if resources.len() < 2 {
         return 0.0;
     }
@@ -1385,7 +1385,7 @@ fn measure_gini(resources: &[f32]) -> f32 {
     gini.clamp(0.0, 1.0) as f32
 }
 
-fn measure_gini_fast(resources: &[f32]) -> f32 {
+pub(crate) fn measure_gini_fast(resources: &[f32]) -> f32 {
     // For large populations, use sorted-rank formula: G = (2 * sum(i*x_i)) / (n * sum(x_i)) - (n+1)/n
     let n = resources.len();
     if n < 2 {
@@ -1407,7 +1407,7 @@ fn measure_gini_fast(resources: &[f32]) -> f32 {
     gini.clamp(0.0, 1.0) as f32
 }
 
-fn measure_skill_entropy(skill_types: &[SkillType]) -> f32 {
+pub(crate) fn measure_skill_entropy(skill_types: &[SkillType]) -> f32 {
     if skill_types.is_empty() {
         return 0.0;
     }
@@ -1428,7 +1428,7 @@ fn measure_skill_entropy(skill_types: &[SkillType]) -> f32 {
     (entropy / max_entropy).clamp(0.0, 1.0) as f32
 }
 
-fn measure_hierarchy_depth(patrons: &[Option<u32>]) -> u32 {
+pub(crate) fn measure_hierarchy_depth(patrons: &[Option<u32>]) -> u32 {
     let mut max_depth = 0_u32;
     for i in 0..patrons.len() {
         let mut depth = 0_u32;
@@ -1457,7 +1457,7 @@ fn measure_hierarchy_depth(patrons: &[Option<u32>]) -> u32 {
     max_depth
 }
 
-fn count_kin_groups(kin_groups: &[u32]) -> u32 {
+pub(crate) fn count_kin_groups(kin_groups: &[u32]) -> u32 {
     if kin_groups.is_empty() {
         return 0;
     }
@@ -1470,7 +1470,7 @@ fn count_kin_groups(kin_groups: &[u32]) -> u32 {
     seen.len() as u32
 }
 
-fn mean_group_size(kin_groups: &[u32]) -> f32 {
+pub(crate) fn mean_group_size(kin_groups: &[u32]) -> f32 {
     let n_groups = count_kin_groups(kin_groups);
     if n_groups == 0 {
         return 0.0;
@@ -2598,7 +2598,7 @@ fn movement_tick(pop: &mut Population, tick: u32, cfg: &AgentSimConfig) {
 // Energy landscape
 // ---------------------------------------------------------------------------
 
-fn init_energy_landscape(cfg: &AgentSimConfig) -> EnergyLandscape {
+pub(crate) fn init_energy_landscape(cfg: &AgentSimConfig) -> EnergyLandscape {
     let ep = &cfg.energy;
     let cell_size = cfg.interaction_radius;
     let cols = (cfg.world_size / cell_size).ceil() as usize + 1;
@@ -2884,7 +2884,7 @@ fn cultural_transmission_tick(
 }
 
 /// Measure cultural diversity as entropy over discrete cultural type combinations.
-fn measure_cultural_diversity(pop: &Population) -> f32 {
+pub(crate) fn measure_cultural_diversity(pop: &Population) -> f32 {
     if pop.is_empty() {
         return 0.0;
     }
@@ -2915,7 +2915,7 @@ fn measure_cultural_diversity(pop: &Population) -> f32 {
 }
 
 /// Count dominant kinship system.
-fn dominant_kinship(pop: &Population) -> u8 {
+pub(crate) fn dominant_kinship(pop: &Population) -> u8 {
     let mut counts = [0_u32; 3];
     for c in &pop.cultures {
         counts[c.kinship_system as usize] += 1;
@@ -2930,7 +2930,7 @@ fn dominant_kinship(pop: &Population) -> u8 {
 }
 
 /// Count dominant marriage rule.
-fn dominant_marriage(pop: &Population) -> u8 {
+pub(crate) fn dominant_marriage(pop: &Population) -> u8 {
     let mut counts = [0_u32; 3];
     for c in &pop.cultures {
         counts[c.marriage_rule as usize] += 1;
@@ -2945,7 +2945,7 @@ fn dominant_marriage(pop: &Population) -> u8 {
 }
 
 /// Mean number of technique bits set.
-fn mean_technique_count(pop: &Population) -> f32 {
+pub(crate) fn mean_technique_count(pop: &Population) -> f32 {
     if pop.is_empty() {
         return 0.0;
     }
@@ -2971,7 +2971,7 @@ fn kin_group_power(pop: &Population, kin: u32, ip: &InteractionParams) -> f32 {
 }
 
 /// Compute mean aggression for a kin group.
-fn kin_group_mean_aggression(pop: &Population, kin: u32) -> f32 {
+pub(crate) fn kin_group_mean_aggression(pop: &Population, kin: u32) -> f32 {
     let mut sum = 0.0_f32;
     let mut count = 0_u32;
     for i in 0..pop.len() {
@@ -2988,7 +2988,7 @@ fn kin_group_mean_aggression(pop: &Population, kin: u32) -> f32 {
 }
 
 /// Compute mean position (centroid) of a kin group.
-fn kin_group_centroid(pop: &Population, kin: u32) -> (f32, f32) {
+pub(crate) fn kin_group_centroid(pop: &Population, kin: u32) -> (f32, f32) {
     let mut sx = 0.0_f32;
     let mut sy = 0.0_f32;
     let mut count = 0_u32;
