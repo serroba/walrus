@@ -501,7 +501,18 @@ matrilineal outcomes persist.
 
 ---
 
-## Phase 6: Integration and the Superorganism Question
+## Phase 6: Integration and the Superorganism Question ✅ COMPLETE
+
+> **Status (2026-03-08):** Implemented in `agents.rs`. Composite `superorganism_index()`
+> function measuring 8 weighted components: hierarchy depth, inequality (Gini),
+> specialization (skill entropy), institutional complexity, coercion rate, energy
+> throughput, cultural authority norm, and tribute extraction. `analyze_superorganism()`
+> tracks peak, sustained threshold, collapses, and final cultural/institutional state.
+> `run_agent_convergence_experiment()` sweeps 8 predefined conditions (baseline,
+> high density, rich/scarce energy, aggressive, cooperative, hierarchical, island)
+> across N seeds. New `agent_convergence` example with per-condition CSV summary,
+> key questions analysis (hierarchy→collapse, kinship→energy, fossil→superorganism).
+> 5 new tests, Makefile target `agent-convergence`.
 
 **Goal:** Run the full model and measure whether superorganism
 emergence is actually inevitable.

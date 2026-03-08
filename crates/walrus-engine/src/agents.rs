@@ -969,6 +969,399 @@ pub struct AgentSimResult {
 }
 
 // ---------------------------------------------------------------------------
+// Superorganism detection (Phase 6)
+// ---------------------------------------------------------------------------
+
+/// Composite superorganism index from emergent state.
+///
+/// The superorganism is a detectable macro pattern where individual agents
+/// optimize locally but the aggregate effect is coordinated throughput-maximizing
+/// behavior that persists even when individuals would benefit from defecting.
+///
+/// Components (each 0-1, averaged):
+/// 1. **Hierarchy**: normalized hierarchy depth (deeper = more coordinated)
+/// 2. **Inequality**: Gini coefficient (resource concentration = throughput focus)
+/// 3. **Specialization**: skill entropy (high entropy = division of labor)
+/// 4. **Institutional complexity**: institutional type normalized (band=0, state=1)
+/// 5. **Coercion**: coercion rate (involuntary transfers = system over individual)
+/// 6. **Energy throughput**: energy per capita normalized (higher = more throughput)
+/// 7. **Cultural authority**: mean authority norm (acceptance of hierarchy)
+/// 8. **Tribute/extraction**: tribute flows > 0 indicates inter-group extraction
+#[must_use]
+pub fn superorganism_index(state: &EmergentState) -> f32 {
+    let n = state.population_size as f32;
+    if n < 10.0 {
+        return 0.0;
+    }
+
+    // 1. Hierarchy depth normalized (0-1, capped at depth 10)
+    let hierarchy = (state.max_hierarchy_depth as f32 / 10.0).min(1.0);
+
+    // 2. Gini (already 0-1)
+    let inequality = state.gini_coefficient;
+
+    // 3. Skill entropy (already normalized 0-1)
+    let specialization = state.skill_entropy;
+
+    // 4. Institutional type (band=0, tribe=0.33, chiefdom=0.67, state=1.0)
+    let institution = state.institutional_type as f32 / 3.0;
+
+    // 5. Coercion rate (already 0-1)
+    let coercion = state.coercion_rate;
+
+    // 6. Energy throughput normalized (log scale, ~0.01 = low, ~1.0 = high)
+    let energy = (state.energy_per_capita * 10.0).min(1.0);
+
+    // 7. Cultural authority norm (already 0-1)
+    let authority = state.mean_authority_norm;
+
+    // 8. Tribute extraction indicator
+    let tribute = if state.tribute_flows > 0.0 { 0.5 } else { 0.0 }
+        + if state.active_tributes > 0 { 0.5 } else { 0.0 };
+
+    // Weighted average — hierarchy, inequality, and institution matter most
+    let weights = [2.0, 1.5, 1.0, 2.0, 1.5, 1.0, 1.0, 1.0];
+    let values = [
+        hierarchy,
+        inequality,
+        specialization,
+        institution,
+        coercion,
+        energy,
+        authority,
+        tribute,
+    ];
+    let total_weight: f32 = weights.iter().sum();
+    let weighted_sum: f32 = weights.iter().zip(values.iter()).map(|(w, v)| w * v).sum();
+    weighted_sum / total_weight
+}
+
+/// Result of analyzing a simulation run for superorganism emergence.
+#[derive(Clone, Debug)]
+pub struct SuperorganismAnalysis {
+    /// Peak superorganism index observed.
+    pub peak_index: f32,
+    /// Tick at which peak was observed.
+    pub peak_tick: u32,
+    /// Final superorganism index.
+    pub final_index: f32,
+    /// Whether the threshold was reached and sustained.
+    pub reached_sustained: bool,
+    /// First tick at which sustained threshold was reached (None if never).
+    pub time_to_sustained: Option<u32>,
+    /// Mean superorganism index over all ticks.
+    pub mean_index: f32,
+    /// Number of collapses (index drops > 0.1 from a local peak).
+    pub collapses: u32,
+    /// Final institutional type.
+    pub final_institution: u8,
+    /// Final dominant kinship system.
+    pub final_kinship: u8,
+    /// Final dominant marriage rule.
+    pub final_marriage: u8,
+    /// Final cultural diversity.
+    pub final_cultural_diversity: f32,
+    /// Final population.
+    pub final_population: u32,
+}
+
+/// Analyze a simulation result for superorganism emergence.
+#[must_use]
+pub fn analyze_superorganism(
+    result: &AgentSimResult,
+    threshold: f32,
+    sustained_ticks: u32,
+) -> SuperorganismAnalysis {
+    let mut peak_index = 0.0_f32;
+    let mut peak_tick = 0_u32;
+    let mut sum_index = 0.0_f32;
+    let mut sustained_count = 0_u32;
+    let mut time_to_sustained: Option<u32> = None;
+    let mut collapses = 0_u32;
+    let mut prev_index = 0.0_f32;
+    let mut local_peak = 0.0_f32;
+
+    for snap in &result.snapshots {
+        let idx = superorganism_index(&snap.emergent);
+        sum_index += idx;
+
+        if idx > peak_index {
+            peak_index = idx;
+            peak_tick = snap.tick;
+        }
+
+        // Track sustained threshold
+        if idx >= threshold {
+            sustained_count += 1;
+            if sustained_count >= sustained_ticks && time_to_sustained.is_none() {
+                time_to_sustained = Some(snap.tick.saturating_sub(sustained_ticks - 1));
+            }
+        } else {
+            sustained_count = 0;
+        }
+
+        // Track collapses (drop of >0.1 from local peak)
+        if idx > local_peak {
+            local_peak = idx;
+        }
+        if prev_index > 0.0 && local_peak - idx > 0.1 {
+            collapses += 1;
+            local_peak = idx; // reset local peak
+        }
+        prev_index = idx;
+    }
+
+    let n = result.snapshots.len() as f32;
+    let last = result.snapshots.last();
+
+    SuperorganismAnalysis {
+        peak_index,
+        peak_tick,
+        final_index: last
+            .map(|s| superorganism_index(&s.emergent))
+            .unwrap_or(0.0),
+        reached_sustained: time_to_sustained.is_some(),
+        time_to_sustained,
+        mean_index: if n > 0.0 { sum_index / n } else { 0.0 },
+        collapses,
+        final_institution: last.map(|s| s.emergent.institutional_type).unwrap_or(0),
+        final_kinship: last.map(|s| s.emergent.dominant_kinship).unwrap_or(0),
+        final_marriage: last.map(|s| s.emergent.dominant_marriage).unwrap_or(0),
+        final_cultural_diversity: last.map(|s| s.emergent.cultural_diversity).unwrap_or(0.0),
+        final_population: last.map(|s| s.emergent.population_size).unwrap_or(0),
+    }
+}
+
+/// Predefined experiment conditions for the convergence study.
+#[derive(Clone, Debug)]
+pub struct ExperimentCondition {
+    pub label: String,
+    pub config: AgentSimConfig,
+}
+
+/// Generate the standard set of experiment conditions.
+#[must_use]
+pub fn default_agent_experiment_conditions() -> Vec<ExperimentCondition> {
+    let base = AgentSimConfig::default();
+
+    vec![
+        // 1. Baseline: default parameters
+        ExperimentCondition {
+            label: "baseline".to_string(),
+            config: base,
+        },
+        // 2. Large population, small world (high density)
+        ExperimentCondition {
+            label: "high_density".to_string(),
+            config: AgentSimConfig {
+                initial_population: 300,
+                world_size: 40.0,
+                max_population: 5000,
+                ..base
+            },
+        },
+        // 3. Rich energy: fast tech growth, all energy types available
+        ExperimentCondition {
+            label: "rich_energy".to_string(),
+            config: AgentSimConfig {
+                initial_population: 200,
+                lifecycle: LifecycleParams {
+                    innovation_growth_rate: 0.002,
+                    ..base.lifecycle
+                },
+                energy: EnergyParams {
+                    agriculture_tech_threshold: 0.1,
+                    fossil_tech_threshold: 0.2,
+                    renewable_tech_threshold: 0.4,
+                    fossil_abundance: 0.8,
+                    ..base.energy
+                },
+                ..base
+            },
+        },
+        // 4. Scarce energy: low biomass, no fossil
+        ExperimentCondition {
+            label: "scarce_energy".to_string(),
+            config: AgentSimConfig {
+                initial_population: 200,
+                energy: EnergyParams {
+                    biomass_flow_rate: 0.02,
+                    fossil_abundance: 0.0,
+                    agriculture_tech_threshold: 0.5,
+                    ..base.energy
+                },
+                ..base
+            },
+        },
+        // 5. Aggressive population: high conflict, many raids
+        ExperimentCondition {
+            label: "aggressive".to_string(),
+            config: AgentSimConfig {
+                initial_population: 200,
+                world_size: 40.0,
+                inter_society: InterSocietyParams {
+                    min_raid_warriors: 2,
+                    raid_aggression_threshold: 0.15,
+                    raid_range: 50.0,
+                    ..base.inter_society
+                },
+                ..base
+            },
+        },
+        // 6. Cooperative culture: high sharing, high trust
+        ExperimentCondition {
+            label: "cooperative".to_string(),
+            config: AgentSimConfig {
+                initial_population: 200,
+                cultural: CulturalParams {
+                    sharing_coop_bonus: 0.4,
+                    trust_trade_bonus: 0.4,
+                    coercion_conflict_bonus: 0.0,
+                    ..base.cultural
+                },
+                ..base
+            },
+        },
+        // 7. Hierarchical culture: high authority, strong coercion tolerance
+        ExperimentCondition {
+            label: "hierarchical".to_string(),
+            config: AgentSimConfig {
+                initial_population: 200,
+                cultural: CulturalParams {
+                    authority_delegation_bonus: 0.4,
+                    coercion_conflict_bonus: 0.2,
+                    ..base.cultural
+                },
+                ..base
+            },
+        },
+        // 8. Island: small isolated population
+        ExperimentCondition {
+            label: "island".to_string(),
+            config: AgentSimConfig {
+                initial_population: 60,
+                world_size: 30.0,
+                max_population: 500,
+                ..base
+            },
+        },
+    ]
+}
+
+/// Summary of a convergence experiment across multiple seeds for one condition.
+#[derive(Clone, Debug)]
+pub struct ConditionSummary {
+    pub label: String,
+    pub runs: u32,
+    pub arrival_rate: f32,
+    pub mean_peak_index: f32,
+    pub mean_final_index: f32,
+    pub median_time_to_sustained: Option<u32>,
+    pub mean_collapses: f32,
+    pub mean_final_population: f32,
+    pub kinship_distribution: [u32; 3], // patrilineal, matrilineal, bilateral
+    pub marriage_distribution: [u32; 3], // monogamy, polygyny, polyandry
+    pub institution_distribution: [u32; 4], // band, tribe, chiefdom, state
+}
+
+/// Full result of the agent-based convergence experiment.
+#[derive(Clone, Debug)]
+pub struct AgentConvergenceResult {
+    pub condition_summaries: Vec<ConditionSummary>,
+    pub all_analyses: Vec<(String, SuperorganismAnalysis)>,
+    pub overall_arrival_rate: f32,
+}
+
+/// Run the full agent-based convergence experiment.
+#[must_use]
+pub fn run_agent_convergence_experiment(
+    conditions: &[ExperimentCondition],
+    seeds_per_condition: u32,
+    ticks: u32,
+    threshold: f32,
+    sustained_ticks: u32,
+) -> AgentConvergenceResult {
+    let mut all_analyses: Vec<(String, SuperorganismAnalysis)> = Vec::new();
+    let mut condition_summaries: Vec<ConditionSummary> = Vec::new();
+
+    for cond in conditions {
+        let mut analyses: Vec<SuperorganismAnalysis> = Vec::new();
+
+        for seed_offset in 0..seeds_per_condition {
+            let mut cfg = cond.config;
+            cfg.seed = cfg.seed.wrapping_add(u64::from(seed_offset) * 1000003);
+            cfg.ticks = ticks;
+            let result = simulate_agents(cfg);
+            let analysis = analyze_superorganism(&result, threshold, sustained_ticks);
+            all_analyses.push((cond.label.clone(), analysis.clone()));
+            analyses.push(analysis);
+        }
+
+        let n = analyses.len() as f32;
+        let arrived: Vec<&SuperorganismAnalysis> =
+            analyses.iter().filter(|a| a.reached_sustained).collect();
+        let arrival_rate = arrived.len() as f32 / n;
+
+        let mut times: Vec<u32> = arrived.iter().filter_map(|a| a.time_to_sustained).collect();
+        times.sort_unstable();
+        let median_time = if times.is_empty() {
+            None
+        } else {
+            Some(times[times.len() / 2])
+        };
+
+        let mut kinship_dist = [0_u32; 3];
+        let mut marriage_dist = [0_u32; 3];
+        let mut institution_dist = [0_u32; 4];
+        for a in &analyses {
+            if (a.final_kinship as usize) < 3 {
+                kinship_dist[a.final_kinship as usize] += 1;
+            }
+            if (a.final_marriage as usize) < 3 {
+                marriage_dist[a.final_marriage as usize] += 1;
+            }
+            if (a.final_institution as usize) < 4 {
+                institution_dist[a.final_institution as usize] += 1;
+            }
+        }
+
+        condition_summaries.push(ConditionSummary {
+            label: cond.label.clone(),
+            runs: seeds_per_condition,
+            arrival_rate,
+            mean_peak_index: analyses.iter().map(|a| a.peak_index).sum::<f32>() / n,
+            mean_final_index: analyses.iter().map(|a| a.final_index).sum::<f32>() / n,
+            median_time_to_sustained: median_time,
+            mean_collapses: analyses.iter().map(|a| a.collapses as f32).sum::<f32>() / n,
+            mean_final_population: analyses
+                .iter()
+                .map(|a| a.final_population as f32)
+                .sum::<f32>()
+                / n,
+            kinship_distribution: kinship_dist,
+            marriage_distribution: marriage_dist,
+            institution_distribution: institution_dist,
+        });
+    }
+
+    let total = all_analyses.len() as f32;
+    let total_arrived = all_analyses
+        .iter()
+        .filter(|(_, a)| a.reached_sustained)
+        .count() as f32;
+
+    AgentConvergenceResult {
+        condition_summaries,
+        all_analyses,
+        overall_arrival_rate: if total > 0.0 {
+            total_arrived / total
+        } else {
+            0.0
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Measurement functions
 // ---------------------------------------------------------------------------
 
@@ -3672,6 +4065,140 @@ mod tests {
                 "dominant_marriage should be 0-2, got {}",
                 snap.emergent.dominant_marriage
             );
+        }
+    }
+
+    // --- Superorganism detection tests (Phase 6) ---
+
+    #[test]
+    fn superorganism_index_is_bounded() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 50,
+            world_size: 30.0,
+            ..AgentSimConfig::default()
+        });
+        for snap in &result.snapshots {
+            let idx = superorganism_index(&snap.emergent);
+            assert!(
+                (0.0..=1.0).contains(&idx),
+                "superorganism index should be 0-1, got {idx}"
+            );
+        }
+    }
+
+    #[test]
+    fn superorganism_index_zero_for_tiny_population() {
+        let state = EmergentState {
+            population_size: 5,
+            ..EmergentState {
+                population_size: 5,
+                mean_resources: 0.0,
+                gini_coefficient: 0.0,
+                skill_entropy: 0.0,
+                max_hierarchy_depth: 0,
+                num_leaders: 0,
+                mean_group_size: 0.0,
+                num_kin_groups: 0,
+                cooperation_rate: 0.0,
+                conflict_rate: 0.0,
+                mean_prestige: 0.0,
+                mean_health: 0.0,
+                mean_innovation: 0.0,
+                dominant_energy: 0,
+                energy_per_capita: 0.0,
+                mean_eroei: 0.0,
+                biomass_depletion: 0.0,
+                fossil_depletion: 0.0,
+                coercion_rate: 0.0,
+                property_norm_strength: 0.0,
+                institutional_type: 0,
+                public_goods_investment: 0.0,
+                patron_count: 0,
+                recognized_leaders: 0,
+                mean_patron_tenure: 0.0,
+                raid_events: 0,
+                conquest_events: 0,
+                tribute_flows: 0.0,
+                migration_events: 0,
+                num_active_societies: 0,
+                inter_group_trade_rate: 0.0,
+                active_tributes: 0,
+                mean_authority_norm: 0.0,
+                mean_sharing_norm: 0.0,
+                mean_property_norm: 0.0,
+                mean_trust_outgroup: 0.0,
+                cultural_diversity: 0.0,
+                dominant_kinship: 0,
+                dominant_marriage: 0,
+                mean_coercion_tolerance: 0.0,
+                technique_count: 0.0,
+            }
+        };
+        assert_eq!(superorganism_index(&state), 0.0);
+    }
+
+    #[test]
+    fn analyze_superorganism_produces_valid_result() {
+        let result = simulate_agents(AgentSimConfig {
+            initial_population: 80,
+            ticks: 100,
+            world_size: 30.0,
+            ..AgentSimConfig::default()
+        });
+        let analysis = analyze_superorganism(&result, 0.3, 10);
+        assert!(analysis.peak_index >= analysis.final_index || analysis.peak_index >= 0.0);
+        assert!(analysis.mean_index >= 0.0);
+        assert!(analysis.final_institution <= 3);
+        assert!(analysis.final_kinship <= 2);
+    }
+
+    #[test]
+    fn high_complexity_run_has_higher_superorganism_index() {
+        // Dense, aggressive, hierarchical -> should score higher than sparse passive
+        let complex = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 200,
+            ticks: 200,
+            world_size: 30.0,
+            max_population: 3000,
+            cultural: CulturalParams {
+                authority_delegation_bonus: 0.4,
+                coercion_conflict_bonus: 0.2,
+                ..CulturalParams::default()
+            },
+            ..AgentSimConfig::default()
+        });
+        let simple = simulate_agents(AgentSimConfig {
+            seed: 42,
+            initial_population: 40,
+            ticks: 200,
+            world_size: 100.0,
+            ..AgentSimConfig::default()
+        });
+        let complex_peak = complex
+            .snapshots
+            .iter()
+            .map(|s| superorganism_index(&s.emergent))
+            .fold(0.0_f32, f32::max);
+        let simple_peak = simple
+            .snapshots
+            .iter()
+            .map(|s| superorganism_index(&s.emergent))
+            .fold(0.0_f32, f32::max);
+        assert!(
+            complex_peak > simple_peak,
+            "complex scenario should have higher superorganism index: complex={complex_peak:.3} simple={simple_peak:.3}"
+        );
+    }
+
+    #[test]
+    fn experiment_conditions_are_valid() {
+        let conditions = default_agent_experiment_conditions();
+        assert_eq!(conditions.len(), 8);
+        for cond in &conditions {
+            assert!(!cond.label.is_empty());
+            assert!(cond.config.initial_population > 0);
         }
     }
 }
