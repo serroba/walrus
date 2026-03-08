@@ -5,6 +5,9 @@ on:
     branches: ["main", "codex/**"]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -38,6 +41,7 @@ jobs:
   coverage:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - scope: engine
