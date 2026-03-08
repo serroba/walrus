@@ -4,6 +4,7 @@ use walrus_engine::agents::{
     simulate_agents, AgentSimConfig, CulturalParams, EnergyParams, InstitutionParams,
     InterSocietyParams, InteractionParams, LifecycleParams, MateSelectionParams, MovementParams,
 };
+use walrus_engine::event_sim::{simulate_event_driven, EventParams, EventSimConfig};
 
 fn env_f32(key: &str, default: f32) -> f32 {
     env::var(key)
@@ -296,102 +297,159 @@ fn institution_type_name(code: u8) -> &'static str {
     }
 }
 
+fn print_csv_header() {
+    println!("time,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes,authority_norm,sharing_norm,property_norm_cultural,trust_outgroup,cultural_diversity,kinship,marriage,coercion_tolerance,techniques");
+}
+
+fn print_emergent_row(time: f64, e: &walrus_engine::agents::EmergentState) {
+    println!(
+        "{:.2},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.2}",
+        time,
+        e.population_size,
+        e.mean_resources,
+        e.gini_coefficient,
+        e.skill_entropy,
+        e.max_hierarchy_depth,
+        e.num_leaders,
+        e.mean_group_size,
+        e.num_kin_groups,
+        e.cooperation_rate,
+        e.conflict_rate,
+        e.mean_prestige,
+        e.mean_health,
+        e.mean_innovation,
+        energy_type_name(e.dominant_energy),
+        e.energy_per_capita,
+        e.mean_eroei,
+        e.biomass_depletion,
+        e.fossil_depletion,
+        e.coercion_rate,
+        e.property_norm_strength,
+        institution_type_name(e.institutional_type),
+        e.public_goods_investment,
+        e.patron_count,
+        e.recognized_leaders,
+        e.mean_patron_tenure,
+        e.raid_events,
+        e.conquest_events,
+        e.tribute_flows,
+        e.migration_events,
+        e.num_active_societies,
+        e.inter_group_trade_rate,
+        e.active_tributes,
+        e.mean_authority_norm,
+        e.mean_sharing_norm,
+        e.mean_property_norm,
+        e.mean_trust_outgroup,
+        e.cultural_diversity,
+        kinship_name(e.dominant_kinship),
+        marriage_name(e.dominant_marriage),
+        e.mean_coercion_tolerance,
+        e.technique_count,
+    );
+}
+
 fn main() {
     let cfg = build_config();
+    let event_driven = env::var("EVENT_DRIVEN")
+        .ok()
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(false);
 
-    eprintln!("Agent Simulation (Phase 5: Cultural Transmission)");
-    eprintln!(
-        "  pop={} ticks={} world={} radius={}",
-        cfg.initial_population, cfg.ticks, cfg.world_size, cfg.interaction_radius
-    );
-    eprintln!(
-        "  energy: biomass_eroei={} ag_eroei={} fossil_eroei={} renew_eroei={}",
-        cfg.energy.biomass_base_eroei,
-        cfg.energy.agriculture_base_eroei,
-        cfg.energy.fossil_base_eroei,
-        cfg.energy.renewable_base_eroei
-    );
-    eprintln!(
-        "  tech thresholds: biomass={} ag={} fossil={} renew={}",
-        cfg.energy.biomass_tech_threshold,
-        cfg.energy.agriculture_tech_threshold,
-        cfg.energy.fossil_tech_threshold,
-        cfg.energy.renewable_tech_threshold
-    );
-    eprintln!(
-        "  innovation_growth_rate={}",
-        cfg.lifecycle.innovation_growth_rate
-    );
+    if event_driven {
+        let end_time = env_f64("END_TIME", cfg.ticks as f64);
+        let event_cfg = EventSimConfig {
+            agent: cfg,
+            event: EventParams {
+                forage_base_rate: env_f64("FORAGE_RATE", 1.0),
+                interact_base_rate: env_f64("INTERACT_RATE", 1.5),
+                move_base_rate: env_f64("MOVE_RATE", 1.0),
+                transmit_base_rate: env_f64("TRANSMIT_RATE", 0.3),
+                reproduce_base_rate: env_f64("REPRODUCE_RATE", 0.5),
+                age_base_rate: env_f64("AGE_RATE", 1.0),
+                learn_base_rate: env_f64("LEARN_RATE", 1.0),
+                raid_base_rate: env_f64("RAID_RATE", 0.2),
+                migrate_base_rate: env_f64("MIGRATE_RATE", 0.3),
+                tribute_interval: env_f64("TRIBUTE_INTERVAL", 1.0),
+                spatial_rebuild_interval: env_f64("SPATIAL_REBUILD_INTERVAL", 1.0),
+                measure_interval: env_f64("MEASURE_INTERVAL", 1.0),
+                landscape_update_interval: env_f64("LANDSCAPE_UPDATE_INTERVAL", 1.0),
+            },
+            end_time,
+        };
 
-    let result = simulate_agents(cfg);
+        eprintln!("Event-Driven Agent Simulation");
+        eprintln!(
+            "  pop={} end_time={:.1} world={} radius={}",
+            event_cfg.agent.initial_population,
+            event_cfg.end_time,
+            event_cfg.agent.world_size,
+            event_cfg.agent.interaction_radius
+        );
 
-    println!("tick,pop,mean_resources,gini,skill_entropy,hierarchy_depth,leaders,mean_group_size,kin_groups,coop_rate,conflict_rate,prestige,health,innovation,dominant_energy,energy_per_capita,mean_eroei,biomass_depletion,fossil_depletion,coercion_rate,property_norms,institution,public_goods,patrons,recognized_leaders,patron_tenure,raids,conquests,tribute_flows,migrations,societies,inter_group_trade_rate,active_tributes,authority_norm,sharing_norm,property_norm_cultural,trust_outgroup,cultural_diversity,kinship,marriage,coercion_tolerance,techniques");
-    for snap in &result.snapshots {
-        let e = &snap.emergent;
-        println!(
-            "{},{},{:.4},{:.4},{:.4},{},{},{:.2},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{:.4},{:.2},{:.4},{:.4},{:.4},{:.4},{},{:.4},{},{},{:.1},{},{},{:.4},{},{},{:.4},{},{:.4},{:.4},{:.4},{:.4},{:.4},{},{},{:.4},{:.2}",
-            snap.tick,
-            e.population_size,
-            e.mean_resources,
-            e.gini_coefficient,
-            e.skill_entropy,
-            e.max_hierarchy_depth,
-            e.num_leaders,
-            e.mean_group_size,
-            e.num_kin_groups,
-            e.cooperation_rate,
-            e.conflict_rate,
-            e.mean_prestige,
-            e.mean_health,
-            e.mean_innovation,
-            energy_type_name(e.dominant_energy),
-            e.energy_per_capita,
-            e.mean_eroei,
-            e.biomass_depletion,
-            e.fossil_depletion,
-            e.coercion_rate,
-            e.property_norm_strength,
-            institution_type_name(e.institutional_type),
-            e.public_goods_investment,
-            e.patron_count,
-            e.recognized_leaders,
-            e.mean_patron_tenure,
-            e.raid_events,
-            e.conquest_events,
-            e.tribute_flows,
-            e.migration_events,
-            e.num_active_societies,
-            e.inter_group_trade_rate,
-            e.active_tributes,
-            e.mean_authority_norm,
-            e.mean_sharing_norm,
-            e.mean_property_norm,
-            e.mean_trust_outgroup,
-            e.cultural_diversity,
-            kinship_name(e.dominant_kinship),
-            marriage_name(e.dominant_marriage),
-            e.mean_coercion_tolerance,
-            e.technique_count,
+        let result = simulate_event_driven(event_cfg);
+
+        print_csv_header();
+        for snap in &result.snapshots {
+            print_emergent_row(snap.time, &snap.emergent);
+        }
+
+        let snaps = result.snapshots.len();
+        let final_pop = result.final_population.len();
+        eprintln!(
+            "{snaps} snapshots, {events} events processed, final pop = {final_pop}",
+            events = result.events_processed,
+        );
+    } else {
+        eprintln!("Agent Simulation (Phase 5: Cultural Transmission)");
+        eprintln!(
+            "  pop={} ticks={} world={} radius={}",
+            cfg.initial_population, cfg.ticks, cfg.world_size, cfg.interaction_radius
+        );
+        eprintln!(
+            "  energy: biomass_eroei={} ag_eroei={} fossil_eroei={} renew_eroei={}",
+            cfg.energy.biomass_base_eroei,
+            cfg.energy.agriculture_base_eroei,
+            cfg.energy.fossil_base_eroei,
+            cfg.energy.renewable_base_eroei
+        );
+        eprintln!(
+            "  tech thresholds: biomass={} ag={} fossil={} renew={}",
+            cfg.energy.biomass_tech_threshold,
+            cfg.energy.agriculture_tech_threshold,
+            cfg.energy.fossil_tech_threshold,
+            cfg.energy.renewable_tech_threshold
+        );
+        eprintln!(
+            "  innovation_growth_rate={}",
+            cfg.lifecycle.innovation_growth_rate
+        );
+
+        let result = simulate_agents(cfg);
+
+        print_csv_header();
+        for snap in &result.snapshots {
+            print_emergent_row(f64::from(snap.tick), &snap.emergent);
+        }
+
+        let ticks_run = result.snapshots.len();
+        let final_pop = result.final_population.len();
+        let final_innov = result
+            .snapshots
+            .last()
+            .map(|s| s.emergent.mean_innovation)
+            .unwrap_or(0.0);
+        eprintln!(
+            "{ticks_run} ticks completed, final pop = {final_pop}, final innovation = {final_innov:.4}"
+        );
+        eprintln!(
+            "  biomass depletion: {:.4}, fossil depletion: {:.4}",
+            result
+                .final_landscape
+                .mean_depletion(walrus_engine::agents::EnergyType::Biomass),
+            result
+                .final_landscape
+                .mean_depletion(walrus_engine::agents::EnergyType::Fossil),
         );
     }
-
-    let ticks_run = result.snapshots.len();
-    let final_pop = result.final_population.len();
-    let final_innov = result
-        .snapshots
-        .last()
-        .map(|s| s.emergent.mean_innovation)
-        .unwrap_or(0.0);
-    eprintln!(
-        "{ticks_run} ticks completed, final pop = {final_pop}, final innovation = {final_innov:.4}"
-    );
-    eprintln!(
-        "  biomass depletion: {:.4}, fossil depletion: {:.4}",
-        result
-            .final_landscape
-            .mean_depletion(walrus_engine::agents::EnergyType::Biomass),
-        result
-            .final_landscape
-            .mean_depletion(walrus_engine::agents::EnergyType::Fossil),
-    );
 }
