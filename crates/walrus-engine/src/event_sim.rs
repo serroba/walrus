@@ -283,8 +283,8 @@ fn handle_interact(world: &mut SimWorld, agent_id: u64, cfg: &EventSimConfig) {
     let total = coop_tendency + conflict_tendency + trade_tendency;
     let roll = rand_f64(rng) as f32 * total;
 
-    // Track cooperative counterfactual for every interaction
-    world.counters.total_cooperative_optimal += ip.coop_resource_bonus;
+    // Track cooperative counterfactual for every interaction (both agents benefit)
+    world.counters.total_cooperative_optimal += ip.coop_resource_bonus * 2.0;
 
     let was_cooperation;
 

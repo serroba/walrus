@@ -1004,6 +1004,8 @@ pub struct AgentSimResult {
 /// 6. **Energy throughput**: energy per capita normalized (higher = more throughput)
 /// 7. **Cultural authority**: mean authority norm (acceptance of hierarchy)
 /// 8. **Tribute/extraction**: tribute flows > 0 indicates inter-group extraction
+/// 9. **Coordination pressure**: CFI — surplus lost to multipolar traps drives
+///    institutional emergence (high = more pressure for hierarchical control)
 #[must_use]
 pub fn superorganism_index(state: &EmergentState) -> f32 {
     let n = state.population_size as f32;
@@ -1036,8 +1038,13 @@ pub fn superorganism_index(state: &EmergentState) -> f32 {
     let tribute = if state.tribute_flows > 0.0 { 0.5 } else { 0.0 }
         + if state.active_tributes > 0 { 0.5 } else { 0.0 };
 
-    // 9. Coordination failure (already 0-1)
-    let coordination_failure = state.coordination_failure_index;
+    // 9. Coordination pressure: high CFI means agents are locked into
+    // defection (Moloch trap), which creates selection pressure for
+    // hierarchical coercion to substitute for voluntary cooperation —
+    // a key driver of superorganism emergence. This intentionally
+    // contributes positively: more coordination failure → more pressure
+    // for institutional control → more superorganism-like.
+    let coordination_pressure = state.coordination_failure_index;
 
     // Weighted average — hierarchy, inequality, and institution matter most
     let weights = [2.0, 1.5, 1.0, 2.0, 1.5, 1.0, 1.0, 1.0, 1.0];
@@ -1050,7 +1057,7 @@ pub fn superorganism_index(state: &EmergentState) -> f32 {
         energy,
         authority,
         tribute,
-        coordination_failure,
+        coordination_pressure,
     ];
     let total_weight: f32 = weights.iter().sum();
     let weighted_sum: f32 = weights.iter().zip(values.iter()).map(|(w, v)| w * v).sum();
@@ -1948,8 +1955,11 @@ struct AgentInteractionResult {
     best_patron: Option<u32>,
     actual_surplus: f32,
     cooperative_optimal_surplus: f32,
-    /// Count of interactions where neighbor cooperated with this agent.
-    coop_received: u32,
+    /// Count of cooperative interactions (used as proxy for trust signal).
+    /// In the parallel tick model, this equals coop_count since each agent
+    /// independently resolves its interactions. The event-driven engine
+    /// updates both participants directly for a more accurate signal.
+    coop_outcome_count: u32,
 }
 
 fn compute_interactions(
@@ -1988,7 +1998,7 @@ fn compute_interactions(
             let mut best_patron_score = 0.0_f32;
             let mut actual_surplus = 0.0_f32;
             let mut cooperative_optimal_surplus = 0.0_f32;
-            let mut coop_received = 0_u32;
+            let mut coop_outcome_count = 0_u32;
 
             let my_coop = pop.cooperations[i];
             let my_aggr = pop.aggressions[i];
@@ -2065,8 +2075,7 @@ fn compute_interactions(
                     coop_count += 1;
                     voluntary += 1;
                     actual_surplus += coop_bonus;
-                    // Cooperation is mutual: both i and j receive cooperation
-                    coop_received += 1;
+                    coop_outcome_count += 1;
                 } else if roll < coop_tendency + conflict_tendency {
                     // Conflict: winner takes resources, loser loses health
                     let my_power = my_status * ip.power_status_weight
@@ -2135,7 +2144,7 @@ fn compute_interactions(
                 best_patron,
                 actual_surplus,
                 cooperative_optimal_surplus,
-                coop_received,
+                coop_outcome_count,
             }
         })
         .collect();
@@ -2178,10 +2187,12 @@ fn compute_interactions(
         effects.total_actual_surplus += result.actual_surplus;
         effects.total_cooperative_optimal += result.cooperative_optimal_surplus;
         effects.per_agent_interactions[i] = result.interaction_count;
-        // Trust signal = fraction of interactions that were cooperation (incoming)
+        // Trust signal: fraction of interactions with cooperative outcomes.
+        // In the parallel tick model this is a proxy for the cooperation environment,
+        // since each agent resolves interactions independently.
         if result.interaction_count > 0 {
             effects.trust_signals[i] =
-                result.coop_received as f32 / result.interaction_count as f32;
+                result.coop_outcome_count as f32 / result.interaction_count as f32;
         }
         if let Some(patron) = result.best_patron {
             effects.delegation_choices.push((i as u32, patron));
@@ -2212,7 +2223,7 @@ fn apply_effects(pop: &mut Population, effects: &InteractionEffects, cfg: &Agent
         // Skill improvement through practice
         pop.skill_levels[i] = (pop.skill_levels[i] + ip.skill_practice_rate).min(1.0);
 
-        // Trust memory EMA update based on incoming cooperation from neighbors
+        // Trust memory EMA update based on cooperative interaction outcomes
         if effects.per_agent_interactions[i] > 0 {
             let alpha = ip.trust_memory_decay.clamp(0.0, 1.0);
             pop.trust_memory[i] = ((1.0 - alpha) * pop.trust_memory[i]
