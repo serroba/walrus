@@ -726,13 +726,12 @@ pub fn run_calibration(
     let baseline = baseline_parameters();
     let sy = start_year(benchmarks);
     let baseline_model = simulate_series(baseline, config.seed, config.ticks, sy);
-    let baseline_cmp = objective(
+    let baseline_score = score(&objective(
         &baseline_model,
         &targets,
         config.turning_window_years,
         config.weights,
-    );
-    let baseline_score = score(&baseline_cmp);
+    ));
 
     let (lo, hi) = bounds_to_lo_hi(&bounds);
     let mut rng = config.seed.max(1);
@@ -744,11 +743,21 @@ pub fn run_calibration(
     let mut scores: Vec<f64> = Vec::with_capacity(simplex_size);
     let mut comparisons: Vec<BenchmarkComparison> = Vec::with_capacity(simplex_size);
 
-    // Vertex 0 = baseline
-    let baseline_vec = params_to_vec(baseline);
+    // Vertex 0 = baseline (clamped to bounds so the simplex stays feasible)
+    let mut baseline_vec = params_to_vec(baseline);
+    clamp_to_bounds(&mut baseline_vec, &lo, &hi);
+    let (baseline_score_clamped, baseline_cmp_clamped) = eval_objective(
+        &baseline_vec,
+        config.seed,
+        config.ticks,
+        sy,
+        &targets,
+        config.turning_window_years,
+        config.weights,
+    );
     simplex.push(baseline_vec);
-    scores.push(baseline_score);
-    comparisons.push(baseline_cmp.clone());
+    scores.push(baseline_score_clamped);
+    comparisons.push(baseline_cmp_clamped);
 
     // Remaining vertices: Latin hypercube–inspired seeding for better initial coverage.
     // Divide each dimension into n strata, shuffle, then jitter within each stratum.
@@ -773,10 +782,9 @@ pub fn run_calibration(
             v[dim] = lo[dim] + (hi[dim] - lo[dim]) * frac;
         }
         clamp_to_bounds(&mut v, &lo, &hi);
-        let seed_i = lcg_next(&mut rng);
         let (s, cmp) = eval_objective(
             &v,
-            seed_i,
+            config.seed,
             config.ticks,
             sy,
             &targets,
@@ -797,8 +805,15 @@ pub fn run_calibration(
 
     // We use `config.iterations` as the evaluation budget.
     // Each NM step costs 1–2 evaluations (reflect ± expand/contract), or n+1 on shrink.
+    // NOTE: the minimum effective budget is simplex_size + 1 (= n + 2) because we need
+    // at least one iteration after building the initial simplex. Callers requesting fewer
+    // evaluations via `config.iterations` will still run at least one NM step.
     let mut evals = simplex_size;
     let max_evals = config.iterations.max(simplex_size + 1);
+
+    // Fixed evaluation seed ensures the objective is deterministic across all simplex
+    // comparisons, preventing noise-induced ordering instability.
+    let eval_seed = config.seed;
 
     while evals < max_evals {
         // Sort simplex by score (ascending = best first)
@@ -833,10 +848,9 @@ pub fn run_calibration(
             reflected[d] = centroid[d] + alpha * (centroid[d] - simplex[worst_idx][d]);
         }
         clamp_to_bounds(&mut reflected, &lo, &hi);
-        let seed_r = lcg_next(&mut rng);
         let (score_r, cmp_r) = eval_objective(
             &reflected,
-            seed_r,
+            eval_seed,
             config.ticks,
             sy,
             &targets,
@@ -855,15 +869,21 @@ pub fn run_calibration(
 
         if score_r < best_score {
             // 2) Expansion — try going further in the reflection direction
+            if evals >= max_evals {
+                // Budget exhausted; accept reflection as-is
+                simplex[worst_idx] = reflected;
+                scores[worst_idx] = score_r;
+                comparisons[worst_idx] = cmp_r;
+                break;
+            }
             let mut expanded = [0.0; PARAM_DIM];
             for d in 0..n {
                 expanded[d] = centroid[d] + gamma * (reflected[d] - centroid[d]);
             }
             clamp_to_bounds(&mut expanded, &lo, &hi);
-            let seed_e = lcg_next(&mut rng);
             let (score_e, cmp_e) = eval_objective(
                 &expanded,
-                seed_e,
+                eval_seed,
                 config.ticks,
                 sy,
                 &targets,
@@ -885,8 +905,12 @@ pub fn run_calibration(
         }
 
         // 3) Contraction — reflected point is worse than second-worst
+        if evals >= max_evals {
+            break;
+        }
+        let is_outside = score_r < scores[worst_idx];
         let mut contracted = [0.0; PARAM_DIM];
-        if score_r < scores[worst_idx] {
+        if is_outside {
             // Outside contraction
             for d in 0..n {
                 contracted[d] = centroid[d] + rho * (reflected[d] - centroid[d]);
@@ -898,10 +922,9 @@ pub fn run_calibration(
             }
         }
         clamp_to_bounds(&mut contracted, &lo, &hi);
-        let seed_c = lcg_next(&mut rng);
         let (score_c, cmp_c) = eval_objective(
             &contracted,
-            seed_c,
+            eval_seed,
             config.ticks,
             sy,
             &targets,
@@ -910,8 +933,14 @@ pub fn run_calibration(
         );
         evals += 1;
 
-        let accept_contraction =
-            (score_r < scores[worst_idx] && score_c <= score_r) || score_c < scores[worst_idx];
+        // Standard Nelder-Mead acceptance:
+        //   Outside contraction: accept only if score_c <= score_r
+        //   Inside contraction:  accept only if score_c < scores[worst]
+        let accept_contraction = if is_outside {
+            score_c <= score_r
+        } else {
+            score_c < scores[worst_idx]
+        };
 
         if accept_contraction {
             simplex[worst_idx] = contracted;
@@ -923,14 +952,16 @@ pub fn run_calibration(
         // 4) Shrink — contract all vertices toward the best vertex
         let best_vertex = simplex[0];
         for i in 1..simplex_size {
+            if evals >= max_evals {
+                break;
+            }
             for d in 0..n {
                 simplex[i][d] = best_vertex[d] + sigma * (simplex[i][d] - best_vertex[d]);
             }
             clamp_to_bounds(&mut simplex[i], &lo, &hi);
-            let seed_s = lcg_next(&mut rng);
             let (s, cmp) = eval_objective(
                 &simplex[i],
-                seed_s,
+                eval_seed,
                 config.ticks,
                 sy,
                 &targets,
@@ -940,9 +971,6 @@ pub fn run_calibration(
             scores[i] = s;
             comparisons[i] = cmp;
             evals += 1;
-            if evals >= max_evals {
-                break;
-            }
         }
     }
 
