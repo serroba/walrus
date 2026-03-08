@@ -17,25 +17,25 @@ This folder defines the foundation and execution plans for an open-source, high-
 
 ## Current Modeling Style
 
-1. Assumptions-first and replaceable:
-- thresholds, topologies, feedbacks, and calibration objectives are explicit and configurable.
-2. Actor + system coupling:
-- micro actor dynamics produce macro emergence and collapse signatures.
-3. Geography and isolation experiments:
-- abstract continent layouts are used to test convergence vs divergence.
-4. Social scaling realism:
-- Dunbar effects are represented as behavioral constraints, not only fixed boundaries.
+The primary simulation layer is the **agent-based model** (`agents.rs`), where individual agents interact locally and macro patterns emerge bottom-up. The 6-phase implementation plan ([`plans/08_emergent-society-evolution.md`](./plans/08_emergent-society-evolution.md)) is complete:
 
-## Immediate Next Step
+1. Individual agents with traits (SoA layout, rayon parallelism)
+2. Energy model with EROEI dynamics and tech-gated transitions
+3. Emergent institutions (detected, not hardcoded)
+4. Inter-society interactions (raids, conquest, tribute, migration)
+5. Cultural transmission (kinship, marriage, norms, techniques)
+6. Superorganism detection and convergence experiment
 
-Start with [`foundations/01_scope-and-goals.md`](./foundations/01_scope-and-goals.md), then implement `plans/01_project-bootstrap.md` and `plans/02_mvp-simulator.md`.
-For emergence-first work, also use [`foundations/06_emergence-rules-and-feedbacks.md`](./foundations/06_emergence-rules-and-feedbacks.md).
-For macro stock-flow constraints, use [`foundations/07_pyworld3-integration-notes.md`](./foundations/07_pyworld3-integration-notes.md).
-For non-technical communication, use [`foundations/08_visualization-guidelines.md`](./foundations/08_visualization-guidelines.md).
-For concrete agent/actor simulation usage, use [`foundations/09_agent-actor-simulation.md`](./foundations/09_agent-actor-simulation.md).
-For explicit modeling assumptions and mental frameworks, use [`foundations/10_mental-frameworks-and-assumptions.md`](./foundations/10_mental-frameworks-and-assumptions.md).
-For macro-reference integration notes (World3/HANDY), use [`foundations/11_nasa-world3-handy-integration.md`](./foundations/11_nasa-world3-handy-integration.md).
-For coordination-failure and AI-risk framing, use [`foundations/12_moloch-ai-coordination-framework.md`](./foundations/12_moloch-ai-coordination-framework.md).
-For current implementation priorities on Moloch/Nash/criticality, use [`plans/08_moloch-coordination-implementation.md`](./plans/08_moloch-coordination-implementation.md).
-For generated example visuals, use [`visual-exploration.md`](./visual-exploration.md).
-For assumption coverage and readiness review, use [`validation/01_assumption-validation.md`](./validation/01_assumption-validation.md).
+Legacy layers (`lib.rs` stock-flow model, `evolution.rs` actor model) remain as diagnostic instruments and alternative modeling approaches.
+
+## Key Documents
+
+| Document | Purpose |
+|----------|---------|
+| [`plans/08_emergent-society-evolution.md`](./plans/08_emergent-society-evolution.md) | 6-phase agent simulation plan (all complete) |
+| [`foundations/01_scope-and-goals.md`](./foundations/01_scope-and-goals.md) | Project scope and goals |
+| [`foundations/06_emergence-rules-and-feedbacks.md`](./foundations/06_emergence-rules-and-feedbacks.md) | Emergence-first design principles |
+| [`foundations/09_agent-actor-simulation.md`](./foundations/09_agent-actor-simulation.md) | Agent/actor simulation usage guidance |
+| [`foundations/10_mental-frameworks-and-assumptions.md`](./foundations/10_mental-frameworks-and-assumptions.md) | Modeling assumptions and mental frameworks |
+| [`foundations/12_moloch-ai-coordination-framework.md`](./foundations/12_moloch-ai-coordination-framework.md) | Coordination-failure and AI-risk framing |
+| [`validation/01_assumption-validation.md`](./validation/01_assumption-validation.md) | Assumption coverage and readiness review |

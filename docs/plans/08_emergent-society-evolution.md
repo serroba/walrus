@@ -556,8 +556,10 @@ Run the convergence experiment from Phase 0 but with real agents:
 
 ## Implementation Sequence
 
+All phases complete as of 2026-03-08.
+
 ```
-Phase 1: Individual Agents          ~3-4 weeks
+Phase 1: Individual Agents          ✅ DONE
   1.1  Agent struct + SoA layout
   1.2  Basic interactions (cooperate, trade, conflict)
   1.3  Lifecycle (birth, aging, death)
@@ -565,32 +567,32 @@ Phase 1: Individual Agents          ~3-4 weeks
   1.5  Delegation / proto-hierarchy
   1.6  Validation suite
 
-Phase 2: Energy Types               ~2 weeks
+Phase 2: Energy Types               ✅ DONE
   2.1  EnergySource struct + EROEI
   2.2  Tech threshold gating
   2.3  Energy-society coupling
   2.4  Validation against historical EROEI
 
-Phase 3: Emergent Institutions      ~2-3 weeks
+Phase 3: Emergent Institutions      ✅ DONE
   3.1  Detection metrics (hierarchy depth, specialization, coercion)
   3.2  Wire detection into EmergenceOrderParameters
   3.3  Remove formula-driven emergence (replace with measurement)
   3.4  Validation against anthropological typology
 
-Phase 4: Inter-Society              ~2-3 weeks
+Phase 4: Inter-Society              ✅ DONE
   4.1  Trade between adjacent populations
   4.2  Raiding and warfare
   4.3  Conquest and tribute
   4.4  Alliance formation
   4.5  Validation (secular cycles, empire dynamics)
 
-Phase 5: Cultural Transmission      ~2-3 weeks
+Phase 5: Cultural Transmission      ✅ DONE
   5.1  Culture struct + transmission mechanisms
   5.2  Kinship / marriage / residence / inheritance rules
   5.3  Prestige-biased transmission
   5.4  Validation (kinship system distribution)
 
-Phase 6: Integration                ~2 weeks
+Phase 6: Integration                ✅ DONE
   6.1  Full convergence experiment with real agents
   6.2  Superorganism detection from emergent metrics
   6.3  Result analysis and visualization

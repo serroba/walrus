@@ -1,180 +1,112 @@
 # Walrus Simulator
 
-Open-source simulation framework to test explicit assumptions about energy, materials, institutions, and emergent superorganism dynamics.
-Current modeling objective: capture how behavior shifts with group size and historical transitions from hunter-gatherer to sedentary to agricultural societies.
+Open-source agent-based simulation framework testing whether **superorganism emergence is inevitable** given enough time and resources. Individual agents interact locally (cooperate, trade, conflict, delegate, court) and macro patterns like hierarchy, specialization, inequality, and coordinated throughput-maximizing behavior emerge from these micro interactions.
 
-## Tech Direction
+## Tech Stack
 
-- Engine core: Rust (performance, safety, scalability)
+- Engine: Rust (struct-of-arrays layout, rayon parallelism, spatial hashing)
 - Analysis/orchestration: optional Python layer later (via `uv`)
 
-## Current Architecture
+## Architecture
 
-- `crates/walrus-engine/src/lib.rs`:
-  - core stock-flow and agent-based interaction engine,
-  - micro->macro projection and superorganism metrics,
-  - adaptive governance module (Laissez/Redistributive/Extractive) with stress channel (resource -> price -> legitimacy),
-  - oxytocin model: continuous 3D affinity vectors driving in-group bonding and out-group othering with emergent tribal clustering,
-  - agent roles (Producer/Coordinator/Trader) with role-based interaction modifiers,
-  - two-layer war mechanics: society-level wars (inter-society) and agent-level raids with affinity polarization.
-- `crates/walrus-engine/src/evolution.rs`:
-  - society actor model across abstract continents,
-  - NK mutation/selection + sexual selection (mate-fitness-proportional reproduction),
-  - Dunbar behavioral constraints (trust, communication, expectation),
-  - configurable isolation/diffusion topology,
-  - superorganism index tracking via core emergence machinery,
-  - convergence experiment framework (multi-seed x multi-condition hypothesis testing).
-- `crates/walrus-engine/src/calibration.rs`:
-  - OWID/Maddison/HANDY-compatible ingestion,
-  - stylized-fact calibration objective.
-- `crates/walrus-engine/src/ensemble.rs`:
-  - uncertainty bands and robustness summaries.
+### Agent simulation (`agents.rs` — primary)
 
-## Quality Gates
+Individual agents with traits, organized in a struct-of-arrays layout for cache efficiency:
 
-- Format: `cargo fmt --all -- --check`
-- Lint: `cargo clippy --workspace --all-targets -- -D warnings`
-- Tests: `cargo test --workspace --all-targets`
-- Coverage (core engine): `cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only`
-- Coverage (workspace): `cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only`
+- **Phase 1 — Individual agents**: sex, age, fertility, health, skills (forager/crafter/builder/leader/warrior), status, prestige, aggression, cooperation, resources. Interactions: cooperation, trade, conflict, delegation, courtship. Lifecycle: aging, death, reproduction with trait inheritance.
+- **Phase 2 — Energy model**: EROEI dynamics with 4 energy types (biomass, agriculture, fossil, renewable). Tech-gated transitions via mean agent innovation. Spatial energy landscape with per-cell sources, depletion, and regeneration.
+- **Phase 3 — Emergent institutions**: detected (not hardcoded) from population state — band/tribe/chiefdom/state classification from hierarchy depth, specialization, coercion rate. Patron-client hierarchies with inheritance. Public goods investment.
+- **Phase 4 — Inter-society interactions**: kin-group level raids (power-based with aggression threshold), conquest triggering tribute relations, per-tick tribute collection, resource-stress migration between groups.
+- **Phase 5 — Cultural transmission**: rich Culture struct (kinship system, marriage rule, residence rule, inheritance rule + authority, coercion tolerance, sharing, property, trust, risk norms + techniques bitfield). Three transmission mechanisms: vertical (parent→child), horizontal (peer→peer), oblique (prestige-biased).
+- **Phase 6 — Superorganism detection**: composite index from 8 weighted components (hierarchy, inequality, specialization, institutional type, coercion, energy throughput, cultural authority, tribute). Convergence experiment sweeping 8 conditions across N seeds.
+
+### Legacy layers
+
+- `lib.rs`: stock-flow macro model, governance module, oxytocin affinity model
+- `evolution.rs`: society-level actor model with NK fitness, Dunbar constraints, continent topology
+- `calibration.rs`: OWID/Maddison calibration objectives
+- `ensemble.rs`: uncertainty bands and robustness summaries
 
 ## Quick Start
 
 ```bash
-cargo fmt --all
+# Check everything compiles and passes
+make check
+
+# Or step by step:
+cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
-cargo llvm-cov --package walrus-engine --all-targets --fail-under-lines 90 --summary-only
-cargo llvm-cov --workspace --all-targets --fail-under-lines 80 --summary-only
 ```
 
-## Run Emergence Example
+## Running the Agent Simulation
+
+### Single run with CSV output
 
 ```bash
-cargo run -p walrus-engine --example emergence_run
+make agent-sim
 ```
 
-## Run Scenario Sweep
+Runs 500 ticks with 150 agents. Outputs CSV to stdout with 42 columns covering population, resources, inequality, energy, institutions, inter-society events, and cultural metrics. All parameters are env-configurable:
 
 ```bash
-cargo run -p walrus-engine --example sweep_scenarios
+INITIAL_POP=300 WORLD_SIZE=50 TICKS=1000 make agent-sim > output.csv
 ```
 
-## Generate Public-Friendly Report
+### Superorganism convergence experiment
 
 ```bash
-make viz-report
+make agent-convergence
 ```
 
-This writes:
-
-- `outputs/latest/report.md` (calibration + uncertainty summary)
-
-## Generate Standalone Viewer
+Tests the core hypothesis across 8 starting conditions (baseline, high density, rich/scarce energy, aggressive, cooperative, hierarchical, island) with multiple seeds:
 
 ```bash
-make viz-app
+SEEDS=50 TICKS=2000 make agent-convergence > results.csv
 ```
 
-This writes a self-contained interactive dashboard with uncertainty bands,
-event annotations, and a driver-explanation panel:
+Outputs per-condition CSV with arrival rates, peak/final superorganism index, institutional/kinship/marriage distributions. Also prints key questions analysis to stderr: hierarchy→collapse correlation, kinship→energy coupling, fossil→superorganism relationship.
 
-- `outputs/latest/app/index.html`
+### Key environment variables
 
-Benchmark anchor used by report/viewer:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `INITIAL_POP` | 150 | Starting population |
+| `TICKS` | 500 | Simulation length |
+| `WORLD_SIZE` | 100 | World dimensions |
+| `INTERACTION_RADIUS` | 8 | Neighbor search radius |
+| `SEEDS` | 10 | Seeds per condition (convergence) |
+| `THRESHOLD` | 0.35 | Superorganism threshold (convergence) |
+| `SUSTAINED` | 20 | Ticks above threshold to count (convergence) |
 
-- `data/benchmarks/owid_maddison_anchor.csv`
+See `examples/agent_simulation.rs` for the full list of 80+ configurable parameters.
 
-## Run Agent-Life TUI
+## Other Examples
+
+| Command | Description |
+|---------|-------------|
+| `make tui-life` | Live terminal agent simulation |
+| `make convergence-experiment` | Legacy evolution-based convergence |
+| `make evolution-run` | Multi-generation actor evolution |
+| `make evolution-sweep` | Isolation level comparison |
+| `make viz-report` | Generate calibration report |
+| `make viz-app` | Interactive dashboard |
+| `make system-feedback` | System feedback tests + emergence run |
+
+## Quality Gates
 
 ```bash
-make tui-life
+make check              # fmt + clippy + tests
+make feedback-loop      # check + coverage (90% engine)
 ```
 
-This launches a live terminal simulation where each character is an agent and
-emergence is shown frame-by-frame.
+## Plan
 
-## Run Convergence Experiment
+The full 6-phase implementation plan is in [`docs/plans/08_emergent-society-evolution.md`](docs/plans/08_emergent-society-evolution.md). All phases are complete.
 
-```bash
-make convergence-experiment
-```
+## Documentation
 
-Tests the core hypothesis: **is superorganism emergence inevitable given enough time and resources?**
-
-Runs 192 simulations (8 starting conditions x 24 seeds) spanning:
-
-- abundant vs. scarce resources,
-- connected vs. isolated geography,
-- many small groups vs. few large groups,
-- varied initial complexity levels.
-
-For each run, tracks whether superorganism index crosses a sustained threshold,
-time-to-emergence, peak signals, and collapse frequency. Outputs per-condition
-arrival rates and distributional statistics.
-
-## Run Evolutionary Actor Map
-
-```bash
-make evolution-run
-```
-
-This runs multi-generation actor evolution with:
-
-- Dunbar behavior transitions (thresholds + trust/communication/expectation shifts),
-- NK fitness + mutation over generations,
-- continent-level energy/resource constraints,
-- local emergence and collapse cycles.
-
-## Run Isolation Sweep
-
-```bash
-make evolution-sweep
-```
-
-This compares abstract continent layouts and isolation levels to study:
-
-- convergent evolution (shared adaptation trajectories),
-- divergence/adaptation to local realities,
-- collapse frequency under constrained diffusion.
-
-## Exploration Snapshots
-
-Generated from real scenario outputs (`cargo run -p walrus-engine --example generate_timeline_csvs` + `node scripts/generate_snapshots.mjs`):
-
-![Baseline snapshot](docs/assets/snapshot_baseline_default.svg)
-![Ecological stress snapshot](docs/assets/snapshot_eco-stress_fragile.svg)
-![Fragmented low coupling snapshot](docs/assets/snapshot_fragmented-low-coupling_default.svg)
-
-## System Feedback Loop
-
-```bash
-make system-feedback
-```
-
-## Agent/Actor Simulation
-
-The engine supports explicit micro-agent interaction loops
-(cooperation/trade/conflict/migration + memory + demographic turnover)
-that roll up into macro emergence metrics.
-
-Each agent carries:
-- a functional **role** (Producer / Coordinator / Trader) with role-based interaction modifiers,
-- a 3D **affinity vector** driving oxytocin-modeled in-group bonding and out-group othering,
-- memory, trust, aggression, and status fields.
-
-Emergent dynamics include:
-- **Tribal clustering**: cooperating agents converge culturally; conflicting agents diverge, producing self-reinforcing cultural boundaries.
-- **Governance cycling**: adaptive policy shifts from laissez-faire (abundance) to redistributive (stress) to extractive (crisis), driven by a resource -> price pressure -> legitimacy erosion causal chain.
-- **Wars**: society-level wars (military strength, resource/population transfer, legitimacy shock) and agent-level raids (aggression-sorted raiding parties, resource seizure, affinity polarization).
-
-It also includes a society-level actor model with per-generation messages,
-geography constraints, and evolutionary adaptation.
-
-Coordination-failure and AI-risk framing is documented in:
-
-- `docs/foundations/12_moloch-ai-coordination-framework.md`
-
-Usage guidance is documented in:
-
-- `docs/foundations/09_agent-actor-simulation.md`
+- `docs/foundations/` — explicit assumptions, mathematical model, simulation design
+- `docs/plans/` — phased implementation plans
+- `docs/foundations/09_agent-actor-simulation.md` — agent/actor usage guidance
+- `docs/foundations/12_moloch-ai-coordination-framework.md` — coordination-failure and AI-risk framing
