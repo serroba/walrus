@@ -1,0 +1,107 @@
+# Walrus Simulation Configuration
+# All fields are optional — omitted values use engine defaults.
+# CLI flags (--population, --seed, etc.) override values set here.
+
+[simulation]
+mode = "evolution"       # "evolution" or "events"
+seed = 2026
+format = "tui"           # "tui", "jsonl", or "summary"
+
+# ── Evolution mode ──────────────────────────────────────────────
+
+[evolution]
+generations = 600
+initial_societies = 24
+isolation_factor = 0.35       # 0.0 = open diffusion, 1.0 = fully isolated
+resource_multiplier = 1.0
+natural_disaster_base_rate = 0.05
+pandemic_base_rate = 0.03
+# NK landscape (institutional search)
+nk_n = 14
+nk_k = 3
+# Population initialization per society
+population_range = [12, 102]
+initial_complexity_range = [0.08, 0.28]
+
+[evolution.dunbar]
+thresholds = [5, 15, 50, 150, 500, 1500]
+expectation_load = [0.06, 0.09, 0.13, 0.20, 0.31, 0.42]
+
+# ── Event-driven mode ──────────────────────────────────────────
+
+[events]
+end_time = 500.0
+measure_interval = 2.0
+
+[events.agent]
+initial_population = 200
+world_size = 80.0
+ticks = 500
+interaction_radius = 8.0
+max_age = 80
+min_population = 10
+max_population = 10000
+
+# Energy EROEI parameters
+[events.energy]
+biomass_base_eroei = 5.0
+biomass_regen_rate = 0.05
+agriculture_base_eroei = 10.0
+agriculture_tech_threshold = 0.25
+agriculture_fertility_prob = 0.4
+fossil_base_eroei = 100.0
+fossil_tech_threshold = 0.5
+renewable_base_eroei = 15.0
+renewable_tech_threshold = 0.75
+
+# Agent interaction weights
+[events.interaction]
+coop_self_weight = 0.5
+coop_other_weight = 0.3
+coop_kin_bonus = 0.2
+conflict_self_weight = 0.4
+conflict_stranger_bonus = 0.15
+subsistence_level = 0.5
+trust_coop_weight = 0.25
+trust_memory_decay = 0.15
+
+# Lifecycle and reproduction
+[events.lifecycle]
+birth_rate = 0.25
+death_health_threshold = 0.01
+starvation_resource_threshold = 0.01
+starvation_death_prob = 0.1
+reproduction_resource_threshold = 0.4
+innovation_growth_rate = 0.0003
+
+# Inter-society dynamics
+[events.inter_society]
+min_raid_warriors = 3
+raid_aggression_threshold = 0.35
+raid_range = 20.0
+conquest_power_ratio = 3.0
+tribute_rate = 0.02
+migration_resource_threshold = 0.15
+migration_probability = 0.05
+
+# Cultural transmission
+[events.cultural]
+vertical_mutation_prob = 0.05
+horizontal_adoption_prob = 0.02
+oblique_adoption_prob = 0.01
+oblique_prestige_gap = 0.3
+
+# Institutions
+[events.institution]
+public_goods_rate = 0.3
+defense_bonus = 0.3
+leadership_threshold = 0.5
+
+# Event scheduling rates
+[events.rates]
+forage_base_rate = 1.0
+interact_base_rate = 1.5
+move_base_rate = 1.0
+reproduce_base_rate = 0.5
+raid_base_rate = 0.2
+migrate_base_rate = 0.3

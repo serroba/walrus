@@ -17,8 +17,316 @@ use walrus_engine::event_sim::{
     simulate_event_driven_with_observer, EventMapFrame, EventSimConfig,
 };
 use walrus_engine::evolution::{
-    simulate_evolution_with_observer, EvolutionConfig, GenerationFrame, MapEvent,
+    simulate_evolution_with_observer, DunbarBehaviorModel, EvolutionConfig, GenerationFrame,
+    MapEvent,
 };
+
+// ---------------------------------------------------------------------------
+// TOML configuration
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlConfig {
+    simulation: TomlSimulation,
+    evolution: TomlEvolution,
+    events: TomlEvents,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlSimulation {
+    mode: Option<String>,
+    seed: Option<u64>,
+    format: Option<String>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlEvolution {
+    generations: Option<u32>,
+    initial_societies: Option<u32>,
+    isolation_factor: Option<f64>,
+    resource_multiplier: Option<f64>,
+    natural_disaster_base_rate: Option<f64>,
+    pandemic_base_rate: Option<f64>,
+    nk_n: Option<usize>,
+    nk_k: Option<usize>,
+    population_range: Option<[u32; 2]>,
+    initial_complexity_range: Option<[f64; 2]>,
+    dunbar: Option<TomlDunbar>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlDunbar {
+    thresholds: Option<[u32; 6]>,
+    expectation_load: Option<[f64; 6]>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlEvents {
+    end_time: Option<f64>,
+    measure_interval: Option<f64>,
+    agent: Option<TomlAgent>,
+    energy: Option<TomlEnergy>,
+    interaction: Option<TomlInteraction>,
+    lifecycle: Option<TomlLifecycle>,
+    inter_society: Option<TomlInterSociety>,
+    cultural: Option<TomlCultural>,
+    institution: Option<TomlInstitution>,
+    rates: Option<TomlRates>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlAgent {
+    initial_population: Option<u32>,
+    world_size: Option<f32>,
+    ticks: Option<u32>,
+    interaction_radius: Option<f32>,
+    max_age: Option<u16>,
+    min_population: Option<u32>,
+    max_population: Option<u32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlEnergy {
+    biomass_base_eroei: Option<f64>,
+    biomass_regen_rate: Option<f64>,
+    agriculture_base_eroei: Option<f64>,
+    agriculture_tech_threshold: Option<f32>,
+    agriculture_fertility_prob: Option<f64>,
+    fossil_base_eroei: Option<f64>,
+    fossil_tech_threshold: Option<f32>,
+    renewable_base_eroei: Option<f64>,
+    renewable_tech_threshold: Option<f32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlInteraction {
+    coop_self_weight: Option<f32>,
+    coop_other_weight: Option<f32>,
+    coop_kin_bonus: Option<f32>,
+    conflict_self_weight: Option<f32>,
+    conflict_stranger_bonus: Option<f32>,
+    subsistence_level: Option<f32>,
+    trust_coop_weight: Option<f32>,
+    trust_memory_decay: Option<f32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlLifecycle {
+    birth_rate: Option<f32>,
+    death_health_threshold: Option<f32>,
+    starvation_resource_threshold: Option<f32>,
+    starvation_death_prob: Option<f32>,
+    reproduction_resource_threshold: Option<f32>,
+    innovation_growth_rate: Option<f32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlInterSociety {
+    min_raid_warriors: Option<u32>,
+    raid_aggression_threshold: Option<f32>,
+    raid_range: Option<f32>,
+    conquest_power_ratio: Option<f32>,
+    tribute_rate: Option<f32>,
+    migration_resource_threshold: Option<f32>,
+    migration_probability: Option<f32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlCultural {
+    vertical_mutation_prob: Option<f64>,
+    horizontal_adoption_prob: Option<f32>,
+    oblique_adoption_prob: Option<f32>,
+    oblique_prestige_gap: Option<f32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlInstitution {
+    public_goods_rate: Option<f32>,
+    defense_bonus: Option<f32>,
+    leadership_threshold: Option<f32>,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct TomlRates {
+    forage_base_rate: Option<f64>,
+    interact_base_rate: Option<f64>,
+    move_base_rate: Option<f64>,
+    reproduce_base_rate: Option<f64>,
+    raid_base_rate: Option<f64>,
+    migrate_base_rate: Option<f64>,
+}
+
+/// Apply Option<T> to a mutable field: if Some, overwrite.
+macro_rules! apply {
+    ($target:expr, $source:expr) => {
+        if let Some(v) = $source {
+            $target = v;
+        }
+    };
+}
+
+impl TomlConfig {
+    fn load(path: &str) -> Self {
+        match std::fs::read_to_string(path) {
+            Ok(content) => match toml::from_str(&content) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!("Warning: failed to parse {path}: {e}");
+                    Self::default()
+                }
+            },
+            Err(_) => Self::default(),
+        }
+    }
+
+    fn to_evolution_config(&self, seed: u64) -> EvolutionConfig {
+        let e = &self.evolution;
+        let mut cfg = EvolutionConfig {
+            seed,
+            ..EvolutionConfig::default()
+        };
+        apply!(cfg.generations, e.generations);
+        apply!(cfg.initial_societies, e.initial_societies);
+        apply!(cfg.isolation_factor, e.isolation_factor);
+        apply!(cfg.resource_multiplier, e.resource_multiplier);
+        apply!(cfg.natural_disaster_base_rate, e.natural_disaster_base_rate);
+        apply!(cfg.pandemic_base_rate, e.pandemic_base_rate);
+        apply!(cfg.nk_n, e.nk_n);
+        apply!(cfg.nk_k, e.nk_k);
+        if let Some(pr) = e.population_range {
+            cfg.population_range = (pr[0], pr[1]);
+        }
+        if let Some(cr) = e.initial_complexity_range {
+            cfg.initial_complexity_range = (cr[0], cr[1]);
+        }
+        if let Some(ref d) = e.dunbar {
+            let mut dm = DunbarBehaviorModel::default();
+            apply!(dm.thresholds, d.thresholds);
+            apply!(dm.expectation_load, d.expectation_load);
+            cfg.dunbar_model = dm;
+        }
+        cfg
+    }
+
+    fn to_event_config(&self, seed: u64) -> EventSimConfig {
+        let ev = &self.events;
+        let mut agent_cfg = AgentSimConfig {
+            seed,
+            ..AgentSimConfig::default()
+        };
+
+        if let Some(ref a) = ev.agent {
+            apply!(agent_cfg.initial_population, a.initial_population);
+            apply!(agent_cfg.world_size, a.world_size);
+            apply!(agent_cfg.ticks, a.ticks);
+            apply!(agent_cfg.interaction_radius, a.interaction_radius);
+            apply!(agent_cfg.max_age, a.max_age);
+            apply!(agent_cfg.min_population, a.min_population);
+            apply!(agent_cfg.max_population, a.max_population);
+        }
+
+        if let Some(ref en) = ev.energy {
+            let e = &mut agent_cfg.energy;
+            apply!(e.biomass_base_eroei, en.biomass_base_eroei);
+            apply!(e.biomass_regen_rate, en.biomass_regen_rate);
+            apply!(e.agriculture_base_eroei, en.agriculture_base_eroei);
+            apply!(e.agriculture_tech_threshold, en.agriculture_tech_threshold);
+            apply!(e.agriculture_fertility_prob, en.agriculture_fertility_prob);
+            apply!(e.fossil_base_eroei, en.fossil_base_eroei);
+            apply!(e.fossil_tech_threshold, en.fossil_tech_threshold);
+            apply!(e.renewable_base_eroei, en.renewable_base_eroei);
+            apply!(e.renewable_tech_threshold, en.renewable_tech_threshold);
+        }
+
+        if let Some(ref ix) = ev.interaction {
+            let i = &mut agent_cfg.interaction;
+            apply!(i.coop_self_weight, ix.coop_self_weight);
+            apply!(i.coop_other_weight, ix.coop_other_weight);
+            apply!(i.coop_kin_bonus, ix.coop_kin_bonus);
+            apply!(i.conflict_self_weight, ix.conflict_self_weight);
+            apply!(i.conflict_stranger_bonus, ix.conflict_stranger_bonus);
+            apply!(i.subsistence_level, ix.subsistence_level);
+            apply!(i.trust_coop_weight, ix.trust_coop_weight);
+            apply!(i.trust_memory_decay, ix.trust_memory_decay);
+        }
+
+        if let Some(ref lc) = ev.lifecycle {
+            let l = &mut agent_cfg.lifecycle;
+            apply!(l.birth_rate, lc.birth_rate);
+            apply!(l.death_health_threshold, lc.death_health_threshold);
+            apply!(
+                l.starvation_resource_threshold,
+                lc.starvation_resource_threshold
+            );
+            apply!(l.starvation_death_prob, lc.starvation_death_prob);
+            apply!(
+                l.reproduction_resource_threshold,
+                lc.reproduction_resource_threshold
+            );
+            apply!(l.innovation_growth_rate, lc.innovation_growth_rate);
+        }
+
+        if let Some(ref is) = ev.inter_society {
+            let s = &mut agent_cfg.inter_society;
+            apply!(s.min_raid_warriors, is.min_raid_warriors);
+            apply!(s.raid_aggression_threshold, is.raid_aggression_threshold);
+            apply!(s.raid_range, is.raid_range);
+            apply!(s.conquest_power_ratio, is.conquest_power_ratio);
+            apply!(s.tribute_rate, is.tribute_rate);
+            apply!(
+                s.migration_resource_threshold,
+                is.migration_resource_threshold
+            );
+            apply!(s.migration_probability, is.migration_probability);
+        }
+
+        if let Some(ref cu) = ev.cultural {
+            let c = &mut agent_cfg.cultural;
+            apply!(c.vertical_mutation_prob, cu.vertical_mutation_prob);
+            apply!(c.horizontal_adoption_prob, cu.horizontal_adoption_prob);
+            apply!(c.oblique_adoption_prob, cu.oblique_adoption_prob);
+            apply!(c.oblique_prestige_gap, cu.oblique_prestige_gap);
+        }
+
+        if let Some(ref inst) = ev.institution {
+            let n = &mut agent_cfg.institution;
+            apply!(n.public_goods_rate, inst.public_goods_rate);
+            apply!(n.defense_bonus, inst.defense_bonus);
+            apply!(n.leadership_threshold, inst.leadership_threshold);
+        }
+
+        let mut event_params = walrus_engine::event_sim::EventParams::default();
+        apply!(event_params.measure_interval, ev.measure_interval);
+
+        if let Some(ref r) = ev.rates {
+            apply!(event_params.forage_base_rate, r.forage_base_rate);
+            apply!(event_params.interact_base_rate, r.interact_base_rate);
+            apply!(event_params.move_base_rate, r.move_base_rate);
+            apply!(event_params.reproduce_base_rate, r.reproduce_base_rate);
+            apply!(event_params.raid_base_rate, r.raid_base_rate);
+            apply!(event_params.migrate_base_rate, r.migrate_base_rate);
+        }
+
+        EventSimConfig {
+            agent: agent_cfg,
+            event: event_params,
+            end_time: ev.end_time.unwrap_or(500.0),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // World map bitmap
@@ -1156,6 +1464,7 @@ fn render_event_log(f: &mut Frame, area: Rect, state: &TuiState) {
 // Simulation modes
 // ---------------------------------------------------------------------------
 
+#[derive(Clone, Copy)]
 enum SimMode {
     Evolution,
     EventDriven,
@@ -1171,26 +1480,51 @@ struct CliArgs {
     sim_mode: SimMode,
     output_format: OutputFormat,
     compare: bool,
+    toml: TomlConfig,
+    // CLI overrides (applied on top of TOML)
+    population: Option<u32>,
+    generations: Option<u32>,
+    seed: Option<u64>,
+}
+
+fn parse_u64(args: &[String], i: usize) -> Option<u64> {
+    args.get(i + 1).and_then(|s| s.parse().ok())
+}
+
+fn parse_u32(args: &[String], i: usize) -> Option<u32> {
+    args.get(i + 1).and_then(|s| s.parse().ok())
 }
 
 fn parse_args() -> CliArgs {
     let args: Vec<String> = std::env::args().collect();
-    let mut sim_mode = SimMode::Evolution;
-    let mut output_format = OutputFormat::Tui;
+    let mut sim_mode: Option<SimMode> = None;
+    let mut output_format: Option<OutputFormat> = None;
     let mut compare = false;
+    let mut population: Option<u32> = None;
+    let mut generations: Option<u32> = None;
+    let mut seed: Option<u64> = None;
+    let mut config_path = "walrus.toml".to_string();
 
     for (i, arg) in args.iter().enumerate() {
         match arg.as_str() {
-            "--events" | "--event-driven" => sim_mode = SimMode::EventDriven,
+            "--events" | "--event-driven" => sim_mode = Some(SimMode::EventDriven),
+            "--evolution" => sim_mode = Some(SimMode::Evolution),
             "--compare" => compare = true,
+            "--config" | "-c" => {
+                if let Some(p) = args.get(i + 1) {
+                    config_path = p.clone();
+                }
+            }
+            "--population" | "--pop" | "-n" => population = parse_u32(&args, i),
+            "--generations" | "--gen" | "-g" => generations = parse_u32(&args, i),
+            "--seed" => seed = parse_u64(&args, i),
             "--format" => {
                 if let Some(fmt) = args.get(i + 1) {
-                    match fmt.as_str() {
-                        "jsonl" | "json" => output_format = OutputFormat::Jsonl,
-                        "summary" | "text" => output_format = OutputFormat::Summary,
-                        "tui" => output_format = OutputFormat::Tui,
-                        _ => eprintln!("Unknown format '{}', using tui", fmt),
-                    }
+                    output_format = Some(match fmt.as_str() {
+                        "jsonl" | "json" => OutputFormat::Jsonl,
+                        "summary" | "text" => OutputFormat::Summary,
+                        _ => OutputFormat::Tui,
+                    });
                 }
             }
             _ => {}
@@ -1198,13 +1532,32 @@ fn parse_args() -> CliArgs {
     }
 
     if std::env::var("EVENT_DRIVEN").unwrap_or_default() == "true" {
-        sim_mode = SimMode::EventDriven;
+        sim_mode = Some(SimMode::EventDriven);
     }
 
+    // Load TOML config (silent if file doesn't exist)
+    let toml = TomlConfig::load(&config_path);
+
+    // TOML provides defaults, CLI overrides
+    let resolved_mode = sim_mode.unwrap_or(match toml.simulation.mode.as_deref() {
+        Some("events" | "event-driven") => SimMode::EventDriven,
+        _ => SimMode::Evolution,
+    });
+
+    let resolved_format = output_format.unwrap_or(match toml.simulation.format.as_deref() {
+        Some("jsonl" | "json") => OutputFormat::Jsonl,
+        Some("summary" | "text") => OutputFormat::Summary,
+        _ => OutputFormat::Tui,
+    });
+
     CliArgs {
-        sim_mode,
-        output_format,
+        sim_mode: resolved_mode,
+        output_format: resolved_format,
         compare,
+        toml,
+        population,
+        generations,
+        seed,
     }
 }
 
@@ -1215,72 +1568,68 @@ fn run_evolution_with_config(tx: mpsc::Sender<UnifiedFrame>, config: EvolutionCo
     });
 }
 
-fn run_evolution(tx: mpsc::Sender<UnifiedFrame>) {
-    let config = EvolutionConfig {
-        generations: 600,
-        initial_societies: 24,
-        ..EvolutionConfig::default()
-    };
-    run_evolution_with_config(tx, config);
+fn make_evolution_config(args: &CliArgs) -> EvolutionConfig {
+    let seed = args
+        .seed
+        .unwrap_or(args.toml.simulation.seed.unwrap_or(2026));
+    let mut cfg = args.toml.to_evolution_config(seed);
+    // CLI overrides
+    if let Some(pop) = args.population {
+        cfg.initial_societies = pop;
+    }
+    if let Some(gen) = args.generations {
+        cfg.generations = gen;
+    }
+    cfg
 }
 
-fn run_event_driven(tx: mpsc::Sender<UnifiedFrame>) {
-    let config = EventSimConfig {
-        agent: AgentSimConfig {
-            initial_population: 200,
-            world_size: 80.0,
-            ..AgentSimConfig::default()
-        },
-        event: walrus_engine::event_sim::EventParams {
-            measure_interval: 2.0,
-            ..Default::default()
-        },
-        end_time: 500.0,
-    };
-    let _ = simulate_event_driven_with_observer(config, |frame| {
-        let unified: UnifiedFrame = frame.clone().into();
-        let _ = tx.send(unified);
-    });
+fn make_event_config(args: &CliArgs) -> EventSimConfig {
+    let seed = args
+        .seed
+        .unwrap_or(args.toml.simulation.seed.unwrap_or(2026));
+    let mut cfg = args.toml.to_event_config(seed);
+    // CLI overrides
+    if let Some(pop) = args.population {
+        cfg.agent.initial_population = pop;
+        // Auto-scale world_size for large populations
+        if pop > 10_000 {
+            cfg.agent.world_size = (pop as f32).sqrt() * 2.0;
+        }
+    }
+    if let Some(gen) = args.generations {
+        cfg.end_time = f64::from(gen);
+    }
+    cfg
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-fn run_jsonl(sim_mode: SimMode) {
-    use std::io::Write;
-    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
-    let stdout = io::stdout();
-
-    let _sim_handle = thread::spawn(move || match sim_mode {
+fn spawn_sim(args: &CliArgs, tx: mpsc::SyncSender<UnifiedFrame>) -> thread::JoinHandle<()> {
+    let evo_config = make_evolution_config(args);
+    let event_config = make_event_config(args);
+    let mode = args.sim_mode;
+    thread::spawn(move || match mode {
         SimMode::Evolution => {
-            let config = EvolutionConfig {
-                generations: 600,
-                initial_societies: 24,
-                ..EvolutionConfig::default()
-            };
-            let _ = simulate_evolution_with_observer(config, |frame| {
+            let _ = simulate_evolution_with_observer(evo_config, |frame| {
                 let _ = tx.send(frame.clone().into());
             });
         }
         SimMode::EventDriven => {
-            let config = EventSimConfig {
-                agent: AgentSimConfig {
-                    initial_population: 200,
-                    world_size: 80.0,
-                    ..AgentSimConfig::default()
-                },
-                event: walrus_engine::event_sim::EventParams {
-                    measure_interval: 2.0,
-                    ..Default::default()
-                },
-                end_time: 500.0,
-            };
-            let _ = simulate_event_driven_with_observer(config, |frame| {
+            let _ = simulate_event_driven_with_observer(event_config, |frame| {
                 let _ = tx.send(frame.clone().into());
             });
         }
-    });
+    })
+}
+
+fn run_jsonl(args: &CliArgs) {
+    use std::io::Write;
+    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
+    let stdout = io::stdout();
+
+    let _sim_handle = spawn_sim(args, tx);
 
     let mut out = io::BufWriter::new(stdout.lock());
     while let Ok(frame) = rx.recv() {
@@ -1291,40 +1640,12 @@ fn run_jsonl(sim_mode: SimMode) {
     }
 }
 
-fn run_summary(sim_mode: SimMode) {
+fn run_summary(args: &CliArgs) {
     use std::io::Write;
     let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
     let stdout = io::stdout();
 
-    let _sim_handle = thread::spawn(move || match sim_mode {
-        SimMode::Evolution => {
-            let config = EvolutionConfig {
-                generations: 600,
-                initial_societies: 24,
-                ..EvolutionConfig::default()
-            };
-            let _ = simulate_evolution_with_observer(config, |frame| {
-                let _ = tx.send(frame.clone().into());
-            });
-        }
-        SimMode::EventDriven => {
-            let config = EventSimConfig {
-                agent: AgentSimConfig {
-                    initial_population: 200,
-                    world_size: 80.0,
-                    ..AgentSimConfig::default()
-                },
-                event: walrus_engine::event_sim::EventParams {
-                    measure_interval: 2.0,
-                    ..Default::default()
-                },
-                end_time: 500.0,
-            };
-            let _ = simulate_event_driven_with_observer(config, |frame| {
-                let _ = tx.send(frame.clone().into());
-            });
-        }
-    });
+    let _sim_handle = spawn_sim(args, tx);
 
     let mut out = io::BufWriter::new(stdout.lock());
     while let Ok(frame) = rx.recv() {
@@ -1363,13 +1684,10 @@ fn run_summary(sim_mode: SimMode) {
     }
 }
 
-fn run_tui(sim_mode: SimMode) -> io::Result<()> {
-    let (tx, rx) = mpsc::channel::<UnifiedFrame>();
+fn run_tui(args: &CliArgs) -> io::Result<()> {
+    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
 
-    let _sim_handle = thread::spawn(move || match sim_mode {
-        SimMode::Evolution => run_evolution(tx),
-        SimMode::EventDriven => run_event_driven(tx),
-    });
+    let _sim_handle = spawn_sim(args, tx);
 
     enable_raw_mode()?;
     io::stdout().execute(EnterAlternateScreen)?;
@@ -1734,13 +2052,13 @@ fn main() -> io::Result<()> {
     }
     match args.output_format {
         OutputFormat::Jsonl => {
-            run_jsonl(args.sim_mode);
+            run_jsonl(&args);
             Ok(())
         }
         OutputFormat::Summary => {
-            run_summary(args.sim_mode);
+            run_summary(&args);
             Ok(())
         }
-        OutputFormat::Tui => run_tui(args.sim_mode),
+        OutputFormat::Tui => run_tui(&args),
     }
 }
