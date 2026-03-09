@@ -1561,7 +1561,7 @@ fn parse_args() -> CliArgs {
     }
 }
 
-fn run_evolution_with_config(tx: mpsc::Sender<UnifiedFrame>, config: EvolutionConfig) {
+fn run_evolution_with_config(tx: mpsc::SyncSender<UnifiedFrame>, config: EvolutionConfig) {
     let _ = simulate_evolution_with_observer(config, |frame| {
         let unified: UnifiedFrame = frame.clone().into();
         let _ = tx.send(unified);
@@ -1685,7 +1685,9 @@ fn run_summary(args: &CliArgs) {
 }
 
 fn run_tui(args: &CliArgs) -> io::Result<()> {
-    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
+    // Buffer of 1: sim blocks after producing each frame until TUI consumes it.
+    // This paces the simulation to the TUI render rate (~12 fps at 80ms).
+    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(1);
 
     let _sim_handle = spawn_sim(args, tx);
 
@@ -1696,9 +1698,9 @@ fn run_tui(args: &CliArgs) -> io::Result<()> {
     let mut state = TuiState::new();
 
     loop {
-        // Only consume new frames when not paused
+        // Consume one frame per render cycle (sim is paced by the channel)
         if !state.paused {
-            while let Ok(frame) = rx.try_recv() {
+            if let Ok(frame) = rx.try_recv() {
                 state.update(frame);
             }
         }
@@ -1988,7 +1990,7 @@ fn render_compare_delta(f: &mut Frame, area: Rect, a: &TuiState, b: &TuiState) {
 
 fn run_compare() -> io::Result<()> {
     // Scenario A: baseline (default parameters)
-    let (tx_a, rx_a) = mpsc::channel::<UnifiedFrame>();
+    let (tx_a, rx_a) = mpsc::sync_channel::<UnifiedFrame>(1);
     let config_a = EvolutionConfig {
         generations: 600,
         initial_societies: 24,
@@ -1997,7 +1999,7 @@ fn run_compare() -> io::Result<()> {
     let _sim_a = thread::spawn(move || run_evolution_with_config(tx_a, config_a));
 
     // Scenario B: high isolation, higher disaster rate
-    let (tx_b, rx_b) = mpsc::channel::<UnifiedFrame>();
+    let (tx_b, rx_b) = mpsc::sync_channel::<UnifiedFrame>(1);
     let config_b = EvolutionConfig {
         generations: 600,
         initial_societies: 24,
@@ -2018,10 +2020,10 @@ fn run_compare() -> io::Result<()> {
     let speed_ms = 80u64;
 
     loop {
-        while let Ok(frame) = rx_a.try_recv() {
+        if let Ok(frame) = rx_a.try_recv() {
             state.a.update(frame);
         }
-        while let Ok(frame) = rx_b.try_recv() {
+        if let Ok(frame) = rx_b.try_recv() {
             state.b.update(frame);
         }
 
