@@ -7,7 +7,9 @@
       "Bash(cargo run:*)",
       "Bash(cargo:*)",
       "Bash(git:*)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(wc:*)",
+      "WebSearch"
     ]
   }
 }

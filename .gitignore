@@ -17,3 +17,6 @@ dist/
 target/
 Cargo.lock
 outputs/
+
+
+.claude/worktrees/
