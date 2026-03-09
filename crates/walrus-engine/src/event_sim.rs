@@ -1782,17 +1782,19 @@ pub struct EventMapFrame {
 
 /// Map an (x, y) position in the world to a continent index (0-3).
 ///
-/// Layout (inspired by world geography):
+/// Layout (inspired by world geography, using asymmetric thresholds):
 /// ```text
-///   ┌───────────┬───────────┐
-///   │ Americas  │ Eurasia   │  top half
-///   │  (2)      │  (1)      │
-///   ├───────────┼───────────┤
-///   │ Americas  │ Africa    │  bottom half
-///   │  (2)      │  (0)      │
-///   └───────────┴───────────┘
+///   x < 0.5              x >= 0.5
+///   ┌──────────────┬─────────────────────┐
+///   │              │     Eurasia (1)      │  y < 0.35
+///   │              ├──────────┬──────────┤
+///   │  Americas    │ Eurasia  │ Oceania  │  0.35 <= y < 0.65
+///   │    (2)       │   (1)    │   (3)    │  (Oceania: x > 0.7)
+///   │              ├──────────┴──────────┤
+///   │              │     Africa (0)      │  y >= 0.65
+///   └──────────────┴─────────────────────┘
 /// ```
-/// Oceania (3) is the bottom-right corner of Eurasia's quadrant.
+/// Thresholds: mid=0.5*world_size, bottom=0.65*world_size, right=0.7*world_size.
 pub fn continent_from_position(x: f32, y: f32, world_size: f32) -> usize {
     let mid = world_size * 0.5;
     let right_third = world_size * 0.7;
@@ -1812,7 +1814,10 @@ pub fn continent_from_position(x: f32, y: f32, world_size: f32) -> usize {
 }
 
 /// Aggregate per-continent stats from population positions.
-fn aggregate_continent_stats(pop: &Population, world_size: f32) -> ([u32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+fn aggregate_continent_stats(
+    pop: &Population,
+    world_size: f32,
+) -> ([u32; 4], [f32; 4], [f32; 4], [f32; 4]) {
     let mut counts = [0_u32; 4];
     let mut res_sums = [0.0_f32; 4];
     let mut health_sums = [0.0_f32; 4];
@@ -1842,7 +1847,11 @@ fn aggregate_continent_stats(pop: &Population, world_size: f32) -> ([u32; 4], [f
 }
 
 /// Count cooperation and conflict events per continent by examining agent positions.
-fn aggregate_continent_interactions(pop: &Population, counters: &EventCounters, world_size: f32) -> ([u32; 4], [u32; 4]) {
+fn aggregate_continent_interactions(
+    pop: &Population,
+    counters: &EventCounters,
+    world_size: f32,
+) -> ([u32; 4], [u32; 4]) {
     // We don't have per-agent interaction tracking, so distribute global counts
     // proportional to population per continent.
     let mut counts = [0_u32; 4];
@@ -1882,8 +1891,7 @@ where
     let mut rng = cfg.agent.seed.wrapping_add(0xE0E0).max(1);
 
     let mut alive: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut id_to_index: std::collections::HashMap<u64, usize> =
-        std::collections::HashMap::new();
+    let mut id_to_index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for (idx, &id) in pop.ids.iter().enumerate() {
         alive.insert(id);
         id_to_index.insert(id, idx);
@@ -1979,61 +1987,58 @@ where
             EventKind::Group {
                 kin_group,
                 ref action,
-            } => {
-                match action {
-                    GroupAction::Raid { target_group } => {
-                        handle_raid(&mut world, kin_group, *target_group, &cfg);
-                    }
-                    GroupAction::Migrate => {
-                        handle_migrate(&mut world, kin_group, &cfg);
-                        queue.push(schedule_group(
-                            world.now,
-                            kin_group,
-                            GroupAction::Migrate,
-                            ep.migrate_base_rate,
-                            &mut world.rng,
-                        ));
+            } => match action {
+                GroupAction::Raid { target_group } => {
+                    handle_raid(&mut world, kin_group, *target_group, &cfg);
+                }
+                GroupAction::Migrate => {
+                    handle_migrate(&mut world, kin_group, &cfg);
+                    queue.push(schedule_group(
+                        world.now,
+                        kin_group,
+                        GroupAction::Migrate,
+                        ep.migrate_base_rate,
+                        &mut world.rng,
+                    ));
 
-                        let mean_aggr = kin_group_mean_aggression(&world.pop, kin_group);
-                        if mean_aggr > cfg.agent.inter_society.raid_aggression_threshold {
-                            let (ax, ay) = kin_group_centroid(&world.pop, kin_group);
-                            let mut kin_ids: Vec<u32> = Vec::new();
-                            for &kg in &world.pop.kin_groups {
-                                if !kin_ids.contains(&kg) {
-                                    kin_ids.push(kg);
-                                }
+                    let mean_aggr = kin_group_mean_aggression(&world.pop, kin_group);
+                    if mean_aggr > cfg.agent.inter_society.raid_aggression_threshold {
+                        let (ax, ay) = kin_group_centroid(&world.pop, kin_group);
+                        let mut kin_ids: Vec<u32> = Vec::new();
+                        for &kg in &world.pop.kin_groups {
+                            if !kin_ids.contains(&kg) {
+                                kin_ids.push(kg);
                             }
-                            let mut best_target: Option<u32> = None;
-                            let mut best_dist = f32::MAX;
-                            for &target in &kin_ids {
-                                if target == kin_group {
-                                    continue;
-                                }
-                                let (tx, ty) = kin_group_centroid(&world.pop, target);
-                                let dist = ((ax - tx).powi(2) + (ay - ty).powi(2)).sqrt();
-                                if dist < cfg.agent.inter_society.raid_range && dist < best_dist
-                                {
-                                    best_dist = dist;
-                                    best_target = Some(target);
-                                }
+                        }
+                        let mut best_target: Option<u32> = None;
+                        let mut best_dist = f32::MAX;
+                        for &target in &kin_ids {
+                            if target == kin_group {
+                                continue;
                             }
-                            if let Some(target) = best_target {
-                                if rand_f64(&mut world.rng) < f64::from(mean_aggr) {
-                                    queue.push(schedule_group(
-                                        world.now,
-                                        kin_group,
-                                        GroupAction::Raid {
-                                            target_group: target,
-                                        },
-                                        ep.raid_base_rate,
-                                        &mut world.rng,
-                                    ));
-                                }
+                            let (tx, ty) = kin_group_centroid(&world.pop, target);
+                            let dist = ((ax - tx).powi(2) + (ay - ty).powi(2)).sqrt();
+                            if dist < cfg.agent.inter_society.raid_range && dist < best_dist {
+                                best_dist = dist;
+                                best_target = Some(target);
+                            }
+                        }
+                        if let Some(target) = best_target {
+                            if rand_f64(&mut world.rng) < f64::from(mean_aggr) {
+                                queue.push(schedule_group(
+                                    world.now,
+                                    kin_group,
+                                    GroupAction::Raid {
+                                        target_group: target,
+                                    },
+                                    ep.raid_base_rate,
+                                    &mut world.rng,
+                                ));
                             }
                         }
                     }
                 }
-            }
+            },
             EventKind::World { ref action } => {
                 match action {
                     WorldAction::RebuildSpatialIndex => {
@@ -2056,16 +2061,22 @@ where
                         // Build map frame from current population state
                         let (cpop, cres, chealth, cinnov) =
                             aggregate_continent_stats(&world.pop, world_size);
-                        let (ccoop, cconf) =
-                            aggregate_continent_interactions(&world.pop, &EventCounters {
+                        let (ccoop, cconf) = aggregate_continent_interactions(
+                            &world.pop,
+                            &EventCounters {
                                 cooperation_events: snapshots.last().map_or(0, |s| {
-                                    (s.emergent.cooperation_rate * s.emergent.population_size as f32) as u32
+                                    (s.emergent.cooperation_rate
+                                        * s.emergent.population_size as f32)
+                                        as u32
                                 }),
                                 conflict_events: snapshots.last().map_or(0, |s| {
-                                    (s.emergent.conflict_rate * s.emergent.population_size as f32) as u32
+                                    (s.emergent.conflict_rate * s.emergent.population_size as f32)
+                                        as u32
                                 }),
                                 ..EventCounters::default()
-                            }, world_size);
+                            },
+                            world_size,
+                        );
 
                         if let Some(snap) = snapshots.last() {
                             let map_frame = EventMapFrame {
@@ -2364,5 +2375,235 @@ mod tests {
                 "tribute flows should be non-negative"
             );
         }
+    }
+
+    // --- continent_from_position tests ---
+
+    #[test]
+    fn continent_from_position_americas_left_half() {
+        let ws = 100.0_f32;
+        // Anything with x < 0.5 * world_size is Americas (index 2)
+        assert_eq!(continent_from_position(10.0, 10.0, ws), 2);
+        assert_eq!(continent_from_position(10.0, 80.0, ws), 2);
+        assert_eq!(continent_from_position(49.0, 50.0, ws), 2);
+        assert_eq!(continent_from_position(0.0, 0.0, ws), 2);
+    }
+
+    #[test]
+    fn continent_from_position_eurasia_upper_right() {
+        let ws = 100.0_f32;
+        // x >= 50, y < 35 -> Eurasia (1)
+        assert_eq!(continent_from_position(60.0, 10.0, ws), 1);
+        assert_eq!(continent_from_position(80.0, 20.0, ws), 1);
+        assert_eq!(continent_from_position(99.0, 0.0, ws), 1);
+        // x >= 50, 35 <= y < 65, x <= 70 -> Eurasia (1)
+        assert_eq!(continent_from_position(55.0, 40.0, ws), 1);
+        assert_eq!(continent_from_position(65.0, 50.0, ws), 1);
+    }
+
+    #[test]
+    fn continent_from_position_oceania_right_middle() {
+        let ws = 100.0_f32;
+        // x > 70, 35 <= y < 65 -> Oceania (3)
+        assert_eq!(continent_from_position(75.0, 40.0, ws), 3);
+        assert_eq!(continent_from_position(90.0, 50.0, ws), 3);
+        assert_eq!(continent_from_position(80.0, 60.0, ws), 3);
+    }
+
+    #[test]
+    fn continent_from_position_africa_lower_right() {
+        let ws = 100.0_f32;
+        // x >= 50, y >= 65 -> Africa (0)
+        assert_eq!(continent_from_position(60.0, 70.0, ws), 0);
+        assert_eq!(continent_from_position(80.0, 90.0, ws), 0);
+        assert_eq!(continent_from_position(99.0, 99.0, ws), 0);
+    }
+
+    // --- aggregate_continent_stats tests ---
+
+    #[test]
+    fn aggregate_continent_stats_distributes_agents() {
+        let cfg = AgentSimConfig {
+            initial_population: 40,
+            world_size: 100.0,
+            ..AgentSimConfig::default()
+        };
+        let pop = seed_population(&cfg);
+        let (counts, mean_res, mean_health, mean_innov) =
+            aggregate_continent_stats(&pop, cfg.world_size);
+
+        let total: u32 = counts.iter().sum();
+        assert_eq!(total, pop.len() as u32);
+
+        // Mean values should be non-negative
+        for ci in 0..4 {
+            assert!(mean_res[ci] >= 0.0);
+            assert!(mean_health[ci] >= 0.0);
+            assert!(mean_innov[ci] >= 0.0);
+        }
+    }
+
+    // --- aggregate_continent_interactions tests ---
+
+    #[test]
+    fn aggregate_continent_interactions_proportional() {
+        let cfg = AgentSimConfig {
+            initial_population: 80,
+            world_size: 100.0,
+            ..AgentSimConfig::default()
+        };
+        let pop = seed_population(&cfg);
+        let counters = EventCounters {
+            cooperation_events: 100,
+            conflict_events: 50,
+            ..EventCounters::default()
+        };
+        let (coop, conf) = aggregate_continent_interactions(&pop, &counters, cfg.world_size);
+
+        let total_coop: u32 = coop.iter().sum();
+        let total_conf: u32 = conf.iter().sum();
+
+        // Due to integer rounding, totals may be slightly less than input counts
+        assert!(total_coop <= 100);
+        assert!(total_conf <= 50);
+        // But at least some should be distributed
+        assert!(total_coop > 0);
+        assert!(total_conf > 0);
+    }
+
+    // --- simulate_event_driven_with_observer tests ---
+
+    #[test]
+    fn event_observer_is_called_with_valid_frames() {
+        let mut frames: Vec<EventMapFrame> = Vec::new();
+        let cfg = EventSimConfig {
+            agent: AgentSimConfig {
+                initial_population: 40,
+                world_size: 30.0,
+                seed: 123,
+                ..AgentSimConfig::default()
+            },
+            event: EventParams::default(),
+            end_time: 20.0,
+        };
+        let result = simulate_event_driven_with_observer(cfg, |frame: &EventMapFrame| {
+            frames.push(frame.clone());
+        });
+
+        assert!(
+            !frames.is_empty(),
+            "observer should be called at least once"
+        );
+        assert!(result.events_processed > 0);
+
+        for frame in &frames {
+            assert!(frame.time >= 0.0);
+            assert!(frame.total_population > 0);
+            assert!(frame.events_processed > 0);
+
+            // Continent populations should sum to total
+            let sum: u32 = frame.continent_populations.iter().sum();
+            assert_eq!(sum, frame.total_population);
+
+            // Mean values should be non-negative
+            for ci in 0..4 {
+                assert!(frame.continent_mean_resources[ci] >= 0.0);
+                assert!(frame.continent_mean_health[ci] >= 0.0);
+                assert!(frame.continent_mean_innovation[ci] >= 0.0);
+            }
+
+            // Emergent state should have valid bounds
+            assert!((0.0..=1.0).contains(&frame.emergent.gini_coefficient));
+            assert!((0.0..=1.0).contains(&frame.emergent.cooperation_rate));
+        }
+    }
+
+    #[test]
+    fn event_observer_frame_times_increase() {
+        let mut times: Vec<f64> = Vec::new();
+        let cfg = EventSimConfig {
+            agent: AgentSimConfig {
+                initial_population: 40,
+                world_size: 25.0,
+                seed: 456,
+                ..AgentSimConfig::default()
+            },
+            event: EventParams::default(),
+            end_time: 20.0,
+        };
+        let _ = simulate_event_driven_with_observer(cfg, |frame: &EventMapFrame| {
+            times.push(frame.time);
+        });
+
+        assert!(times.len() >= 2, "should have multiple measurement frames");
+        for window in times.windows(2) {
+            assert!(
+                window[1] >= window[0],
+                "frame times should increase: {} >= {}",
+                window[1],
+                window[0]
+            );
+        }
+    }
+
+    #[test]
+    fn event_observer_result_matches_direct_run() {
+        let cfg = EventSimConfig {
+            agent: AgentSimConfig {
+                initial_population: 40,
+                world_size: 25.0,
+                seed: 789,
+                ..AgentSimConfig::default()
+            },
+            event: EventParams::default(),
+            end_time: 15.0,
+        };
+
+        let direct = simulate_event_driven(cfg.clone());
+        let mut observer_count = 0_u32;
+        let observer_result = simulate_event_driven_with_observer(cfg, |_frame: &EventMapFrame| {
+            observer_count += 1;
+        });
+
+        // Same seed should produce the same number of snapshots
+        assert_eq!(direct.snapshots.len(), observer_result.snapshots.len());
+        assert_eq!(direct.events_processed, observer_result.events_processed);
+
+        // Observer should be called once per measurement snapshot
+        assert_eq!(observer_count, direct.snapshots.len() as u32);
+    }
+
+    #[test]
+    fn event_observer_captures_inter_society_counters() {
+        let mut has_nonzero_raid = false;
+        let mut has_nonzero_migration = false;
+        let cfg = EventSimConfig {
+            agent: AgentSimConfig {
+                initial_population: 80,
+                world_size: 30.0,
+                seed: 321,
+                ..AgentSimConfig::default()
+            },
+            event: EventParams {
+                raid_base_rate: 0.5,
+                migrate_base_rate: 0.8,
+                ..EventParams::default()
+            },
+            end_time: 50.0,
+        };
+        let _ = simulate_event_driven_with_observer(cfg, |frame: &EventMapFrame| {
+            if frame.raid_events > 0 {
+                has_nonzero_raid = true;
+            }
+            if frame.migration_events > 0 {
+                has_nonzero_migration = true;
+            }
+        });
+
+        // With elevated rates and enough time, at least one should fire
+        assert!(
+            has_nonzero_raid || has_nonzero_migration,
+            "expected at least some raid or migration events in 50 time units"
+        );
     }
 }

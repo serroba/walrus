@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io;
 use std::sync::mpsc;
 use std::thread;
@@ -12,11 +13,11 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Sparkline};
 
 use walrus_engine::agents::AgentSimConfig;
-use walrus_engine::evolution::{
-    simulate_evolution_with_observer, EvolutionConfig, GenerationFrame, MapEvent,
-};
 use walrus_engine::event_sim::{
     simulate_event_driven_with_observer, EventMapFrame, EventSimConfig,
+};
+use walrus_engine::evolution::{
+    simulate_evolution_with_observer, EvolutionConfig, GenerationFrame, MapEvent,
 };
 
 // ---------------------------------------------------------------------------
@@ -108,13 +109,33 @@ struct UnifiedFrame {
 
 #[derive(Clone, serde::Serialize)]
 enum TuiEvent {
-    Disaster { continent: usize, severity: f64 },
-    Pandemic { continent: usize, severity: f64 },
-    Climate { continent: usize, severity: f64 },
-    Collapse { continent: usize },
-    Migration { from: usize, to: usize },
-    ModeTransition { continent: usize, from: &'static str, to: &'static str },
-    Raid { count: u32 },
+    Disaster {
+        continent: usize,
+        severity: f64,
+    },
+    Pandemic {
+        continent: usize,
+        severity: f64,
+    },
+    Climate {
+        continent: usize,
+        severity: f64,
+    },
+    Collapse {
+        continent: usize,
+    },
+    Migration {
+        from: usize,
+        to: usize,
+    },
+    ModeTransition {
+        continent: usize,
+        from: &'static str,
+        to: &'static str,
+    },
+    Raid {
+        count: u32,
+    },
 }
 
 fn mode_str(mode: walrus_engine::SubsistenceMode) -> &'static str {
@@ -128,16 +149,58 @@ fn mode_str(mode: walrus_engine::SubsistenceMode) -> &'static str {
 impl From<GenerationFrame> for UnifiedFrame {
     fn from(f: GenerationFrame) -> Self {
         let mut continents = [
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
         ];
 
         for (ci, slot) in continents.iter_mut().enumerate() {
             let socs: Vec<_> = f.societies.iter().filter(|s| s.continent == ci).collect();
             let pop: u64 = socs.iter().map(|s| u64::from(s.population)).sum();
-            let cx = if socs.is_empty() { 0.0 } else {
+            let cx = if socs.is_empty() {
+                0.0
+            } else {
                 socs.iter().map(|s| s.complexity).sum::<f64>() / socs.len() as f64
             };
             let depl = f.continent_states.get(ci).map_or(0.0, |s| s.depletion);
@@ -152,9 +215,13 @@ impl From<GenerationFrame> for UnifiedFrame {
                     walrus_engine::SubsistenceMode::Agriculture => ag += u64::from(s.population),
                 }
             }
-            let mode = if ag >= sed && ag >= hg { "Agr" }
-                else if sed >= hg { "Sed" }
-                else { "HG" };
+            let mode = if ag >= sed && ag >= hg {
+                "Agr"
+            } else if sed >= hg {
+                "Sed"
+            } else {
+                "HG"
+            };
 
             *slot = ContinentStats {
                 population: pop,
@@ -169,16 +236,45 @@ impl From<GenerationFrame> for UnifiedFrame {
             };
         }
 
-        let events: Vec<TuiEvent> = f.events.iter().map(|e| match *e {
-            MapEvent::NaturalDisaster { continent, severity } => TuiEvent::Disaster { continent, severity },
-            MapEvent::Pandemic { continent, severity } => TuiEvent::Pandemic { continent, severity },
-            MapEvent::ClimateShock { continent, severity } => TuiEvent::Climate { continent, severity },
-            MapEvent::Collapse { continent, .. } => TuiEvent::Collapse { continent },
-            MapEvent::Migration { from, to } => TuiEvent::Migration { from, to },
-            MapEvent::ModeTransition { continent, from, to, .. } => TuiEvent::ModeTransition {
-                continent, from: mode_str(from), to: mode_str(to),
-            },
-        }).collect();
+        let events: Vec<TuiEvent> = f
+            .events
+            .iter()
+            .map(|e| match *e {
+                MapEvent::NaturalDisaster {
+                    continent,
+                    severity,
+                } => TuiEvent::Disaster {
+                    continent,
+                    severity,
+                },
+                MapEvent::Pandemic {
+                    continent,
+                    severity,
+                } => TuiEvent::Pandemic {
+                    continent,
+                    severity,
+                },
+                MapEvent::ClimateShock {
+                    continent,
+                    severity,
+                } => TuiEvent::Climate {
+                    continent,
+                    severity,
+                },
+                MapEvent::Collapse { continent, .. } => TuiEvent::Collapse { continent },
+                MapEvent::Migration { from, to } => TuiEvent::Migration { from, to },
+                MapEvent::ModeTransition {
+                    continent,
+                    from,
+                    to,
+                    ..
+                } => TuiEvent::ModeTransition {
+                    continent,
+                    from: mode_str(from),
+                    to: mode_str(to),
+                },
+            })
+            .collect();
 
         UnifiedFrame {
             generation: f.snapshot.generation,
@@ -203,10 +299,50 @@ impl From<GenerationFrame> for UnifiedFrame {
 impl From<EventMapFrame> for UnifiedFrame {
     fn from(f: EventMapFrame) -> Self {
         let mut continents = [
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
-            ContinentStats { population: 0, society_count: 0, mean_complexity: 0.0, depletion: 0.0, carrying_capacity: 1.0, dominant_mode: "HG", mean_resources: 0.0, cooperation_count: 0, conflict_count: 0 },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
+            ContinentStats {
+                population: 0,
+                society_count: 0,
+                mean_complexity: 0.0,
+                depletion: 0.0,
+                carrying_capacity: 1.0,
+                dominant_mode: "HG",
+                mean_resources: 0.0,
+                cooperation_count: 0,
+                conflict_count: 0,
+            },
         ];
 
         for (ci, slot) in continents.iter_mut().enumerate() {
@@ -225,22 +361,22 @@ impl From<EventMapFrame> for UnifiedFrame {
 
         let mut events = Vec::new();
         if f.raid_events > 0 {
-            events.push(TuiEvent::Raid { count: f.raid_events });
+            events.push(TuiEvent::Raid {
+                count: f.raid_events,
+            });
         }
-        if f.migration_events > 0 {
-            // Distribute migrations across corridors heuristically
-            for _ in 0..f.migration_events.min(4) {
-                events.push(TuiEvent::Migration { from: 1, to: 0 });
-            }
-        }
+        // NOTE: event-driven sim lacks per-continent origin/destination data for
+        // migrations, so we don't emit directional Migration events (which would
+        // misrepresent where migrations actually occur). Migration count is still
+        // visible in the summary/JSONL output via the frame's migration_events field.
 
         // Map institutional type to complexity proxy
         let inst_type = f.emergent.institutional_type;
         let complexity_proxy = match inst_type {
-            0 => 0.1, // band
+            0 => 0.1,  // band
             1 => 0.35, // tribe
             2 => 0.65, // chiefdom
-            _ => 0.9, // state
+            _ => 0.9,  // state
         };
         for slot in &mut continents {
             slot.mean_complexity = complexity_proxy;
@@ -304,11 +440,7 @@ impl ContinentFlash {
 // Color logic
 // ---------------------------------------------------------------------------
 
-fn continent_cell_style(
-    ci: usize,
-    frame: &UnifiedFrame,
-    flashes: &[ContinentFlash; 4],
-) -> Style {
+fn continent_cell_style(ci: usize, frame: &UnifiedFrame, flashes: &[ContinentFlash; 4]) -> Style {
     let c = &frame.continents[ci];
     let pop_ratio = (c.population as f64 / (c.carrying_capacity * 200.0).max(1.0)).clamp(0.0, 1.0);
     let green_base = (80.0 + 160.0 * pop_ratio) as u8;
@@ -394,7 +526,11 @@ fn path_char(from: (u16, u16), to: (u16, u16), is_tip: bool) -> char {
     let dy = to.1 as i32 - from.1 as i32;
     if is_tip {
         if dx.abs() > dy.abs() {
-            if dx > 0 { '\u{25B6}' } else { '\u{25C0}' }
+            if dx > 0 {
+                '\u{25B6}'
+            } else {
+                '\u{25C0}'
+            }
         } else if dy > 0 {
             '\u{25BC}'
         } else {
@@ -438,14 +574,14 @@ struct TuiState {
     frame: Option<UnifiedFrame>,
     flashes: [ContinentFlash; 4],
     active_migrations: Vec<(usize, usize, u8)>,
-    event_log: Vec<EventLogEntry>,
+    event_log: VecDeque<EventLogEntry>,
     pop_history: Vec<u64>,
     complexity_history: Vec<u64>,
     so_history: Vec<u64>,
     paused: bool,
     speed_ms: u64,
     // Phase F: history + playback
-    history: Vec<UnifiedFrame>,
+    history: VecDeque<UnifiedFrame>,
     playback_cursor: Option<usize>, // None = live, Some(idx) = viewing history
     focused_continent: Option<usize>, // None = all, Some(0..4) = focused
 }
@@ -458,13 +594,13 @@ impl TuiState {
             frame: None,
             flashes: [ContinentFlash::default(); 4],
             active_migrations: Vec::new(),
-            event_log: Vec::new(),
+            event_log: VecDeque::new(),
             pop_history: Vec::new(),
             complexity_history: Vec::new(),
             so_history: Vec::new(),
             paused: false,
             speed_ms: 80,
-            history: Vec::new(),
+            history: VecDeque::new(),
             playback_cursor: None,
             focused_continent: None,
         }
@@ -475,36 +611,95 @@ impl TuiState {
 
         for ev in &frame.events {
             match *ev {
-                TuiEvent::Disaster { continent, severity } => {
-                    if continent < 4 { self.flashes[continent].disaster = 7; }
-                    self.log(gen, format!("DISASTER {}: sev {severity:.2}",
-                        CONTINENT_NAMES.get(continent).unwrap_or(&"?")), Color::Yellow);
+                TuiEvent::Disaster {
+                    continent,
+                    severity,
+                } => {
+                    if continent < 4 {
+                        self.flashes[continent].disaster = 7;
+                    }
+                    self.log(
+                        gen,
+                        format!(
+                            "DISASTER {}: sev {severity:.2}",
+                            CONTINENT_NAMES.get(continent).unwrap_or(&"?")
+                        ),
+                        Color::Yellow,
+                    );
                 }
-                TuiEvent::Pandemic { continent, severity } => {
-                    if continent < 4 { self.flashes[continent].pandemic = 7; }
-                    self.log(gen, format!("PANDEMIC {}: sev {severity:.2}",
-                        CONTINENT_NAMES.get(continent).unwrap_or(&"?")), Color::Magenta);
+                TuiEvent::Pandemic {
+                    continent,
+                    severity,
+                } => {
+                    if continent < 4 {
+                        self.flashes[continent].pandemic = 7;
+                    }
+                    self.log(
+                        gen,
+                        format!(
+                            "PANDEMIC {}: sev {severity:.2}",
+                            CONTINENT_NAMES.get(continent).unwrap_or(&"?")
+                        ),
+                        Color::Magenta,
+                    );
                 }
-                TuiEvent::Climate { continent, severity } => {
-                    if continent < 4 { self.flashes[continent].climate = 6; }
-                    self.log(gen, format!("CLIMATE {}: sev {severity:.2}",
-                        CONTINENT_NAMES.get(continent).unwrap_or(&"?")), Color::Rgb(255, 140, 0));
+                TuiEvent::Climate {
+                    continent,
+                    severity,
+                } => {
+                    if continent < 4 {
+                        self.flashes[continent].climate = 6;
+                    }
+                    self.log(
+                        gen,
+                        format!(
+                            "CLIMATE {}: sev {severity:.2}",
+                            CONTINENT_NAMES.get(continent).unwrap_or(&"?")
+                        ),
+                        Color::Rgb(255, 140, 0),
+                    );
                 }
                 TuiEvent::Collapse { continent } => {
-                    if continent < 4 { self.flashes[continent].collapse = 9; }
-                    self.log(gen, format!("COLLAPSE {}",
-                        CONTINENT_NAMES.get(continent).unwrap_or(&"?")), Color::Red);
+                    if continent < 4 {
+                        self.flashes[continent].collapse = 9;
+                    }
+                    self.log(
+                        gen,
+                        format!(
+                            "COLLAPSE {}",
+                            CONTINENT_NAMES.get(continent).unwrap_or(&"?")
+                        ),
+                        Color::Red,
+                    );
                 }
                 TuiEvent::Migration { from, to } => {
-                    if to < 4 { self.flashes[to].migration = 4; }
+                    if to < 4 {
+                        self.flashes[to].migration = 4;
+                    }
                     self.active_migrations.push((from, to, 6));
-                    self.log(gen, format!("MIGRATE {} -> {}",
-                        CONTINENT_NAMES.get(from).unwrap_or(&"?"),
-                        CONTINENT_NAMES.get(to).unwrap_or(&"?")), Color::Cyan);
+                    self.log(
+                        gen,
+                        format!(
+                            "MIGRATE {} -> {}",
+                            CONTINENT_NAMES.get(from).unwrap_or(&"?"),
+                            CONTINENT_NAMES.get(to).unwrap_or(&"?")
+                        ),
+                        Color::Cyan,
+                    );
                 }
-                TuiEvent::ModeTransition { continent, from, to } => {
-                    self.log(gen, format!("MODE {} {from}->{to}",
-                        CONTINENT_NAMES.get(continent).unwrap_or(&"?")), Color::White);
+                TuiEvent::ModeTransition {
+                    continent,
+                    from,
+                    to,
+                } => {
+                    self.log(
+                        gen,
+                        format!(
+                            "MODE {} {from}->{to}",
+                            CONTINENT_NAMES.get(continent).unwrap_or(&"?")
+                        ),
+                        Color::White,
+                    );
                 }
                 TuiEvent::Raid { count } => {
                     for fl in &mut self.flashes {
@@ -516,15 +711,21 @@ impl TuiState {
         }
 
         push_bounded(&mut self.pop_history, frame.total_population, 60);
-        push_bounded(&mut self.complexity_history,
-            (frame.mean_complexity * 1000.0) as u64, 60);
-        push_bounded(&mut self.so_history,
-            (frame.superorganism_index * 1000.0) as u64, 60);
+        push_bounded(
+            &mut self.complexity_history,
+            (frame.mean_complexity * 1000.0) as u64,
+            60,
+        );
+        push_bounded(
+            &mut self.so_history,
+            (frame.superorganism_index * 1000.0) as u64,
+            60,
+        );
 
-        // Store in history ring buffer
-        self.history.push(frame.clone());
+        // Store in history ring buffer (O(1) eviction with VecDeque)
+        self.history.push_back(frame.clone());
         if self.history.len() > MAX_HISTORY {
-            self.history.remove(0);
+            self.history.pop_front();
             // Adjust playback cursor if in playback mode
             if let Some(ref mut cursor) = self.playback_cursor {
                 *cursor = cursor.saturating_sub(1);
@@ -545,9 +746,13 @@ impl TuiState {
     }
 
     fn log(&mut self, generation: u32, text: String, color: Color) {
-        self.event_log.push(EventLogEntry { generation, text, color });
+        self.event_log.push_back(EventLogEntry {
+            generation,
+            text,
+            color,
+        });
         if self.event_log.len() > MAX_LOG_ENTRIES {
-            self.event_log.remove(0);
+            self.event_log.pop_front();
         }
     }
 
@@ -561,7 +766,9 @@ impl TuiState {
     }
 
     fn scrub_back(&mut self) {
-        if self.history.is_empty() { return; }
+        if self.history.is_empty() {
+            return;
+        }
         let cursor = match self.playback_cursor {
             Some(c) => c.saturating_sub(1),
             None => self.history.len().saturating_sub(2),
@@ -613,12 +820,18 @@ fn render(f: &mut Frame, state: &TuiState) {
 
     let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(MAP_HEIGHT as u16 + 2), Constraint::Length(8)])
+        .constraints([
+            Constraint::Min(MAP_HEIGHT as u16 + 2),
+            Constraint::Length(8),
+        ])
         .split(f.area());
 
     let top = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(MAP_WIDTH as u16 + 2), Constraint::Length(30)])
+        .constraints([
+            Constraint::Min(MAP_WIDTH as u16 + 2),
+            Constraint::Length(30),
+        ])
         .split(outer[0]);
 
     let bottom = Layout::default()
@@ -639,23 +852,25 @@ fn render_map(
     flashes: &[ContinentFlash; 4],
     active_migrations: &[(usize, usize, u8)],
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(
-            " World Map [{mode}] | t={gen} | pop {pop} | soc {soc} ",
-            mode = frame.mode_label,
-            gen = frame.generation,
-            pop = frame.total_population,
-            soc = frame.total_societies,
-        ));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " World Map [{mode}] | t={gen} | pop {pop} | soc {soc} ",
+        mode = frame.mode_label,
+        gen = frame.generation,
+        pop = frame.total_population,
+        soc = frame.total_societies,
+    ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     for (row_idx, row_str) in MAP_ROWS.iter().enumerate() {
-        if row_idx as u16 >= inner.height { break; }
+        if row_idx as u16 >= inner.height {
+            break;
+        }
         let y = inner.y + row_idx as u16;
         for (col_idx, ch) in row_str.chars().enumerate() {
-            if col_idx as u16 >= inner.width { break; }
+            if col_idx as u16 >= inner.width {
+                break;
+            }
             let x = inner.x + col_idx as u16;
             if let Some(ci) = continent_index(ch) {
                 let style = continent_cell_style(ci, frame, flashes);
@@ -669,23 +884,33 @@ fn render_map(
 
     // Static corridor arrows
     for &(from, to, strength) in &frame.corridors {
-        if strength < 0.05 || from >= 4 || to >= 4 { continue; }
+        if strength < 0.05 || from >= 4 || to >= 4 {
+            continue;
+        }
         let c_from = CONTINENT_CENTROIDS[from];
         let c_to = CONTINENT_CENTROIDS[to];
         let cells = line_cells(c_from, c_to);
         let len = cells.len();
-        if len < 2 { continue; }
+        if len < 2 {
+            continue;
+        }
         let step = (len / 4).max(1);
         let intensity = (strength * 200.0).clamp(30.0, 180.0) as u8;
         for (i, &(cx, cy)) in cells.iter().enumerate() {
-            if i == 0 || (i % step != 0 && i != len - 1) { continue; }
+            if i == 0 || (i % step != 0 && i != len - 1) {
+                continue;
+            }
             let ax = inner.x + cx;
             let ay = inner.y + cy;
             if ax < inner.x + inner.width && ay < inner.y + inner.height {
                 let ch = path_char(c_from, c_to, i == len - 1);
                 if let Some(buf_cell) = f.buffer_mut().cell_mut(Position::new(ax, ay)) {
                     buf_cell.set_char(ch);
-                    buf_cell.set_style(Style::default().fg(Color::Rgb(0, intensity / 2, intensity)));
+                    buf_cell.set_style(Style::default().fg(Color::Rgb(
+                        0,
+                        intensity / 2,
+                        intensity,
+                    )));
                 }
             }
         }
@@ -693,12 +918,16 @@ fn render_map(
 
     // Active migration arrows
     for &(from, to, ttl) in active_migrations {
-        if from >= 4 || to >= 4 { continue; }
+        if from >= 4 || to >= 4 {
+            continue;
+        }
         let c_from = CONTINENT_CENTROIDS[from];
         let c_to = CONTINENT_CENTROIDS[to];
         let cells = line_cells(c_from, c_to);
         let len = cells.len();
-        if len < 2 { continue; }
+        if len < 2 {
+            continue;
+        }
         let progress = 1.0 - (f64::from(ttl) / 6.0);
         let visible = ((len as f64) * progress).ceil() as usize;
         let brightness = (ttl as u16 * 40).min(255) as u8;
@@ -710,7 +939,8 @@ fn render_map(
                 let ch = path_char(c_from, c_to, is_tip);
                 if let Some(buf_cell) = f.buffer_mut().cell_mut(Position::new(ax, ay)) {
                     buf_cell.set_char(ch);
-                    buf_cell.set_style(Style::default().fg(Color::Rgb(brightness, 255, 255)).bold());
+                    buf_cell
+                        .set_style(Style::default().fg(Color::Rgb(brightness, 255, 255)).bold());
                 }
             }
         }
@@ -771,11 +1001,13 @@ fn render_sidebar(f: &mut Frame, area: Rect, frame: &UnifiedFrame, state: &TuiSt
 
         if !c.dominant_mode.is_empty() {
             lines.push(Line::from(format!(
-                "   cx:{:.2} dep:{:.2} {}", c.mean_complexity, c.depletion, c.dominant_mode
+                "   cx:{:.2} dep:{:.2} {}",
+                c.mean_complexity, c.depletion, c.dominant_mode
             )));
         } else {
             lines.push(Line::from(format!(
-                "   res:{:.1} c:{}/f:{}", c.mean_resources, c.cooperation_count, c.conflict_count
+                "   res:{:.1} c:{}/f:{}",
+                c.mean_resources, c.cooperation_count, c.conflict_count
             )));
         }
 
@@ -790,30 +1022,39 @@ fn render_sidebar(f: &mut Frame, area: Rect, frame: &UnifiedFrame, state: &TuiSt
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(vec![
-        Span::styled("Global", Style::default().fg(Color::White).bold()),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        "Global",
+        Style::default().fg(Color::White).bold(),
+    )]));
     lines.push(Line::from(format!(
-        " SO:{:.3} CX:{:.3}", frame.superorganism_index, frame.mean_complexity,
+        " SO:{:.3} CX:{:.3}",
+        frame.superorganism_index, frame.mean_complexity,
     )));
     if frame.convergence_index > 0.0 {
         lines.push(Line::from(format!(
-            " conv:{:.3} civ:{}", frame.convergence_index, frame.emergent_civilizations,
+            " conv:{:.3} civ:{}",
+            frame.convergence_index, frame.emergent_civilizations,
         )));
     }
 
     let mut indicators: Vec<Span> = Vec::new();
     if frame.collapse_events > 0 {
         indicators.push(Span::styled(
-            format!(" C:{}", frame.collapse_events), Style::default().fg(Color::Red).bold()));
+            format!(" C:{}", frame.collapse_events),
+            Style::default().fg(Color::Red).bold(),
+        ));
     }
     if frame.disaster_events > 0 {
         indicators.push(Span::styled(
-            format!(" D:{}", frame.disaster_events), Style::default().fg(Color::Yellow)));
+            format!(" D:{}", frame.disaster_events),
+            Style::default().fg(Color::Yellow),
+        ));
     }
     if frame.pandemic_events > 0 {
         indicators.push(Span::styled(
-            format!(" P:{}", frame.pandemic_events), Style::default().fg(Color::Magenta)));
+            format!(" P:{}", frame.pandemic_events),
+            Style::default().fg(Color::Magenta),
+        ));
     }
     if !indicators.is_empty() {
         lines.push(Line::from(indicators));
@@ -823,18 +1064,28 @@ fn render_sidebar(f: &mut Frame, area: Rect, frame: &UnifiedFrame, state: &TuiSt
 
     // Status line with playback info
     let status = if state.playback_cursor.is_some() {
-        format!("PLAYBACK {}/{}", state.playback_cursor.map_or(0, |c| c + 1), state.history.len())
+        format!(
+            "PLAYBACK {}/{}",
+            state.playback_cursor.map_or(0, |c| c + 1),
+            state.history.len()
+        )
     } else if state.paused {
         "PAUSED".to_string()
     } else {
         "LIVE".to_string()
     };
     lines.push(Line::from(vec![Span::styled(
-        format!("[{status}] {:.0}ms", state.speed_ms), Style::default().fg(Color::DarkGray))]));
+        format!("[{status}] {:.0}ms", state.speed_ms),
+        Style::default().fg(Color::DarkGray),
+    )]));
     lines.push(Line::from(vec![Span::styled(
-        "q:quit p:pause +/-:spd", Style::default().fg(Color::DarkGray))]));
+        "q:quit p:pause +/-:spd",
+        Style::default().fg(Color::DarkGray),
+    )]));
     lines.push(Line::from(vec![Span::styled(
-        "Tab:focus </>:scrub s:save", Style::default().fg(Color::DarkGray))]));
+        "Tab:focus </>:scrub s:save",
+        Style::default().fg(Color::DarkGray),
+    )]));
 
     f.render_widget(Paragraph::new(lines), inner);
 }
@@ -866,7 +1117,11 @@ fn render_timeline(f: &mut Frame, area: Rect, state: &TuiState) {
     );
     f.render_widget(
         Sparkline::default()
-            .block(Block::default().borders(Borders::ALL).title(" Superorganism "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Superorganism "),
+            )
             .data(&state.so_history)
             .style(Style::default().fg(Color::Cyan)),
         chunks[1],
@@ -880,11 +1135,16 @@ fn render_event_log(f: &mut Frame, area: Rect, state: &TuiState) {
 
     let visible = inner.height as usize;
     let start = state.event_log.len().saturating_sub(visible);
-    let lines: Vec<Line> = state.event_log[start..]
+    let lines: Vec<Line> = state
+        .event_log
         .iter()
+        .skip(start)
         .map(|entry| {
             Line::from(vec![
-                Span::styled(format!("{:>3} ", entry.generation), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{:>3} ", entry.generation),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(&entry.text, Style::default().fg(entry.color)),
             ])
         })
@@ -941,7 +1201,11 @@ fn parse_args() -> CliArgs {
         sim_mode = SimMode::EventDriven;
     }
 
-    CliArgs { sim_mode, output_format, compare }
+    CliArgs {
+        sim_mode,
+        output_format,
+        compare,
+    }
 }
 
 fn run_evolution_with_config(tx: mpsc::Sender<UnifiedFrame>, config: EvolutionConfig) {
@@ -985,12 +1249,37 @@ fn run_event_driven(tx: mpsc::Sender<UnifiedFrame>) {
 
 fn run_jsonl(sim_mode: SimMode) {
     use std::io::Write;
-    let (tx, rx) = mpsc::channel::<UnifiedFrame>();
+    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
     let stdout = io::stdout();
 
     let _sim_handle = thread::spawn(move || match sim_mode {
-        SimMode::Evolution => run_evolution(tx),
-        SimMode::EventDriven => run_event_driven(tx),
+        SimMode::Evolution => {
+            let config = EvolutionConfig {
+                generations: 600,
+                initial_societies: 24,
+                ..EvolutionConfig::default()
+            };
+            let _ = simulate_evolution_with_observer(config, |frame| {
+                let _ = tx.send(frame.clone().into());
+            });
+        }
+        SimMode::EventDriven => {
+            let config = EventSimConfig {
+                agent: AgentSimConfig {
+                    initial_population: 200,
+                    world_size: 80.0,
+                    ..AgentSimConfig::default()
+                },
+                event: walrus_engine::event_sim::EventParams {
+                    measure_interval: 2.0,
+                    ..Default::default()
+                },
+                end_time: 500.0,
+            };
+            let _ = simulate_event_driven_with_observer(config, |frame| {
+                let _ = tx.send(frame.clone().into());
+            });
+        }
     });
 
     let mut out = io::BufWriter::new(stdout.lock());
@@ -1004,21 +1293,51 @@ fn run_jsonl(sim_mode: SimMode) {
 
 fn run_summary(sim_mode: SimMode) {
     use std::io::Write;
-    let (tx, rx) = mpsc::channel::<UnifiedFrame>();
+    let (tx, rx) = mpsc::sync_channel::<UnifiedFrame>(8);
     let stdout = io::stdout();
 
     let _sim_handle = thread::spawn(move || match sim_mode {
-        SimMode::Evolution => run_evolution(tx),
-        SimMode::EventDriven => run_event_driven(tx),
+        SimMode::Evolution => {
+            let config = EvolutionConfig {
+                generations: 600,
+                initial_societies: 24,
+                ..EvolutionConfig::default()
+            };
+            let _ = simulate_evolution_with_observer(config, |frame| {
+                let _ = tx.send(frame.clone().into());
+            });
+        }
+        SimMode::EventDriven => {
+            let config = EventSimConfig {
+                agent: AgentSimConfig {
+                    initial_population: 200,
+                    world_size: 80.0,
+                    ..AgentSimConfig::default()
+                },
+                event: walrus_engine::event_sim::EventParams {
+                    measure_interval: 2.0,
+                    ..Default::default()
+                },
+                end_time: 500.0,
+            };
+            let _ = simulate_event_driven_with_observer(config, |frame| {
+                let _ = tx.send(frame.clone().into());
+            });
+        }
     });
 
     let mut out = io::BufWriter::new(stdout.lock());
     while let Ok(frame) = rx.recv() {
-        let continent_summary: String = frame.continents.iter().enumerate()
-            .map(|(ci, c)| format!(
-                "{}:p={}/cx={:.2}",
-                CONTINENT_NAMES[ci], c.population, c.mean_complexity,
-            ))
+        let continent_summary: String = frame
+            .continents
+            .iter()
+            .enumerate()
+            .map(|(ci, c)| {
+                format!(
+                    "{}:p={}/cx={:.2}",
+                    CONTINENT_NAMES[ci], c.population, c.mean_complexity,
+                )
+            })
             .collect::<Vec<_>>()
             .join(" ");
 
@@ -1059,8 +1378,11 @@ fn run_tui(sim_mode: SimMode) -> io::Result<()> {
     let mut state = TuiState::new();
 
     loop {
-        while let Ok(frame) = rx.try_recv() {
-            state.update(frame);
+        // Only consume new frames when not paused
+        if !state.paused {
+            while let Ok(frame) = rx.try_recv() {
+                state.update(frame);
+            }
         }
 
         terminal.draw(|f| render(f, &state))?;
@@ -1131,7 +1453,10 @@ impl CompareState {
 fn render_compare(f: &mut Frame, state: &CompareState) {
     let outer = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(MAP_HEIGHT as u16 + 2), Constraint::Length(8)])
+        .constraints([
+            Constraint::Min(MAP_HEIGHT as u16 + 2),
+            Constraint::Length(8),
+        ])
         .split(f.area());
 
     // Two maps side by side
@@ -1157,19 +1482,19 @@ fn render_compare_map(f: &mut Frame, area: Rect, state: &TuiState, label: &str) 
     let frame = match &state.frame {
         Some(fr) => fr,
         None => {
-            let block = Block::default().borders(Borders::ALL).title(format!(" {label}: waiting... "));
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {label}: waiting... "));
             f.render_widget(block, area);
             return;
         }
     };
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(
-            " {label} | t={gen} | pop {pop} ",
-            gen = frame.generation,
-            pop = frame.total_population,
-        ));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " {label} | t={gen} | pop {pop} ",
+        gen = frame.generation,
+        pop = frame.total_population,
+    ));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -1179,10 +1504,14 @@ fn render_compare_map(f: &mut Frame, area: Rect, state: &TuiState, label: &str) 
 
     for (row_idx, row_str) in MAP_ROWS.iter().enumerate() {
         let y = inner.y + (row_idx as f64 * scale_y) as u16;
-        if y >= inner.y + inner.height { break; }
+        if y >= inner.y + inner.height {
+            break;
+        }
         for (col_idx, ch) in row_str.chars().enumerate() {
             let x = inner.x + (col_idx as f64 * scale_x) as u16;
-            if x >= inner.x + inner.width { break; }
+            if x >= inner.x + inner.width {
+                break;
+            }
             if let Some(ci) = continent_index(ch) {
                 let style = continent_cell_style(ci, frame, &state.flashes);
                 if let Some(buf_cell) = f.buffer_mut().cell_mut(Position::new(x, y)) {
@@ -1194,40 +1523,74 @@ fn render_compare_map(f: &mut Frame, area: Rect, state: &TuiState, label: &str) 
     }
 }
 
-fn render_compare_sparklines(f: &mut Frame, area: Rect, a: &TuiState, _b: &TuiState) {
+fn render_compare_sparklines(f: &mut Frame, area: Rect, a: &TuiState, b: &TuiState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Length(4)])
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(4),
+            Constraint::Length(4),
+        ])
         .split(area);
 
-    // Population sparkline — overlay both
-    let block_pop = Block::default().borders(Borders::ALL).title(" Population A(green) B(cyan) ");
-    let inner_pop = block_pop.inner(chunks[0]);
-    f.render_widget(block_pop, chunks[0]);
-
-    // Render A's population as green
+    // Population A
     f.render_widget(
         Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Pop A (green) "),
+            )
             .data(&a.pop_history)
             .style(Style::default().fg(Color::Green)),
-        inner_pop,
+        chunks[0],
     );
 
-    // Complexity sparkline
-    let block_cx = Block::default().borders(Borders::ALL).title(" Complexity A(blue) B(yellow) ");
-    let inner_cx = block_cx.inner(chunks[1]);
-    f.render_widget(block_cx, chunks[1]);
-
+    // Population B
     f.render_widget(
         Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Pop B (cyan) "),
+            )
+            .data(&b.pop_history)
+            .style(Style::default().fg(Color::Cyan)),
+        chunks[1],
+    );
+
+    // Complexity A
+    f.render_widget(
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" CX A (blue) "),
+            )
             .data(&a.complexity_history)
             .style(Style::default().fg(Color::Blue)),
-        inner_cx,
+        chunks[2],
+    );
+
+    // Complexity B
+    f.render_widget(
+        Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" CX B (yellow) "),
+            )
+            .data(&b.complexity_history)
+            .style(Style::default().fg(Color::Yellow)),
+        chunks[3],
     );
 }
 
 fn render_compare_delta(f: &mut Frame, area: Rect, a: &TuiState, b: &TuiState) {
-    let block = Block::default().borders(Borders::ALL).title(" Delta (A - B) ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Delta (A - B) ");
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -1245,35 +1608,61 @@ fn render_compare_delta(f: &mut Frame, area: Rect, a: &TuiState, b: &TuiState) {
     let dso = fa.superorganism_index - fb.superorganism_index;
 
     let delta_color = |v: f64| -> Color {
-        if v > 0.01 { Color::Green }
-        else if v < -0.01 { Color::Red }
-        else { Color::DarkGray }
+        if v > 0.01 {
+            Color::Green
+        } else if v < -0.01 {
+            Color::Red
+        } else {
+            Color::DarkGray
+        }
     };
 
     let lines = vec![
         Line::from(vec![
             Span::raw("Pop: "),
-            Span::styled(format!("{:+}", dpop), Style::default().fg(
-                if dpop > 0 { Color::Green } else if dpop < 0 { Color::Red } else { Color::DarkGray }
-            )),
+            Span::styled(
+                format!("{:+}", dpop),
+                Style::default().fg(if dpop > 0 {
+                    Color::Green
+                } else if dpop < 0 {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                }),
+            ),
         ]),
         Line::from(vec![
             Span::raw("Soc: "),
-            Span::styled(format!("{:+}", dsoc), Style::default().fg(
-                if dsoc > 0 { Color::Green } else if dsoc < 0 { Color::Red } else { Color::DarkGray }
-            )),
+            Span::styled(
+                format!("{:+}", dsoc),
+                Style::default().fg(if dsoc > 0 {
+                    Color::Green
+                } else if dsoc < 0 {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                }),
+            ),
         ]),
         Line::from(vec![
             Span::raw("CX:  "),
-            Span::styled(format!("{:+.3}", dcx), Style::default().fg(delta_color(dcx))),
+            Span::styled(
+                format!("{:+.3}", dcx),
+                Style::default().fg(delta_color(dcx)),
+            ),
         ]),
         Line::from(vec![
             Span::raw("SO:  "),
-            Span::styled(format!("{:+.3}", dso), Style::default().fg(delta_color(dso))),
+            Span::styled(
+                format!("{:+.3}", dso),
+                Style::default().fg(delta_color(dso)),
+            ),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
-            "q:quit p:pause +/-:spd", Style::default().fg(Color::DarkGray))]),
+            "q:quit",
+            Style::default().fg(Color::DarkGray),
+        )]),
     ];
 
     f.render_widget(Paragraph::new(lines), inner);
@@ -1306,10 +1695,7 @@ fn run_compare() -> io::Result<()> {
     io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
-    let mut state = CompareState::new(
-        "Baseline".to_string(),
-        "Isolated+Harsh".to_string(),
-    );
+    let mut state = CompareState::new("Baseline".to_string(), "Isolated+Harsh".to_string());
 
     let speed_ms = 80u64;
 
@@ -1328,7 +1714,9 @@ fn run_compare() -> io::Result<()> {
         if event::poll(Duration::from_millis(speed_ms))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
-                    if let KeyCode::Char('q') = key.code { break }
+                    if let KeyCode::Char('q') = key.code {
+                        break;
+                    }
                 }
             }
         }

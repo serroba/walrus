@@ -754,12 +754,32 @@ pub fn simulate_evolution(config: EvolutionConfig) -> EvolutionResult {
 /// A discrete event that occurred during a generation, tagged with location.
 #[derive(Clone, Debug, PartialEq)]
 pub enum MapEvent {
-    NaturalDisaster { continent: usize, severity: f64 },
-    Pandemic { continent: usize, severity: f64 },
-    ClimateShock { continent: usize, severity: f64 },
-    Collapse { continent: usize, society_id: u64 },
-    Migration { from: usize, to: usize },
-    ModeTransition { continent: usize, society_id: u64, from: SubsistenceMode, to: SubsistenceMode },
+    NaturalDisaster {
+        continent: usize,
+        severity: f64,
+    },
+    Pandemic {
+        continent: usize,
+        severity: f64,
+    },
+    ClimateShock {
+        continent: usize,
+        severity: f64,
+    },
+    Collapse {
+        continent: usize,
+        society_id: u64,
+    },
+    Migration {
+        from: usize,
+        to: usize,
+    },
+    ModeTransition {
+        continent: usize,
+        society_id: u64,
+        from: SubsistenceMode,
+        to: SubsistenceMode,
+    },
 }
 
 /// Per-generation world state emitted to observers during simulation.
@@ -777,7 +797,10 @@ pub struct GenerationFrame {
 /// Run evolution simulation, calling `observer` after each generation with full world state.
 /// Returns the same `EvolutionResult` as `simulate_evolution`.
 #[must_use]
-pub fn simulate_evolution_with_observer<F>(config: EvolutionConfig, mut observer: F) -> EvolutionResult
+pub fn simulate_evolution_with_observer<F>(
+    config: EvolutionConfig,
+    mut observer: F,
+) -> EvolutionResult
 where
     F: FnMut(&GenerationFrame),
 {
@@ -827,14 +850,23 @@ where
                 match *message {
                     ActorMessage::NaturalDisaster { severity } => {
                         natural_disaster_events = natural_disaster_events.saturating_add(1);
-                        events.push(MapEvent::NaturalDisaster { continent: ci, severity });
+                        events.push(MapEvent::NaturalDisaster {
+                            continent: ci,
+                            severity,
+                        });
                     }
                     ActorMessage::PandemicWave { severity } => {
                         pandemic_events = pandemic_events.saturating_add(1);
-                        events.push(MapEvent::Pandemic { continent: ci, severity });
+                        events.push(MapEvent::Pandemic {
+                            continent: ci,
+                            severity,
+                        });
                     }
                     ActorMessage::ClimateShock { severity } => {
-                        events.push(MapEvent::ClimateShock { continent: ci, severity });
+                        events.push(MapEvent::ClimateShock {
+                            continent: ci,
+                            severity,
+                        });
                     }
                     _ => {}
                 }
@@ -1712,8 +1744,9 @@ mod tests {
     use super::{
         apply_actor_messages, default_experiment_conditions, dunbar_behavior, dunbar_group_scale,
         dunbar_group_scale_with_thresholds, run_convergence_experiment, simulate_evolution,
-        ActorMessage, ContinentalLayout, ConvergenceExperimentConfig, DunbarBehaviorModel,
-        EvolutionConfig, Genome, GroupScale, NkLandscape, SocietyActor, WorldMap,
+        simulate_evolution_with_observer, ActorMessage, ContinentalLayout,
+        ConvergenceExperimentConfig, DunbarBehaviorModel, EvolutionConfig, GenerationFrame, Genome,
+        GroupScale, MapEvent, NkLandscape, SocietyActor, WorldMap,
     };
     use crate::SubsistenceMode;
 
@@ -1896,5 +1929,190 @@ mod tests {
         assert!(actor.trust < before.trust);
         assert!(actor.surplus < before.surplus + 0.06);
         assert!(actor.resilience > 0.0);
+    }
+
+    #[test]
+    fn observer_is_called_each_generation() {
+        let generations = 10_u32;
+        let mut call_count = 0_u32;
+        let _ = simulate_evolution_with_observer(
+            EvolutionConfig {
+                seed: 42,
+                generations,
+                initial_societies: 8,
+                nk_n: 10,
+                nk_k: 2,
+                layout: ContinentalLayout::Connected,
+                isolation_factor: 0.1,
+                resource_multiplier: 1.0,
+                ..EvolutionConfig::default()
+            },
+            |_frame: &GenerationFrame| {
+                call_count += 1;
+            },
+        );
+        assert_eq!(call_count, generations);
+    }
+
+    #[test]
+    fn observer_frame_has_populated_fields() {
+        let mut frames: Vec<GenerationFrame> = Vec::new();
+        let _ = simulate_evolution_with_observer(
+            EvolutionConfig {
+                seed: 77,
+                generations: 15,
+                initial_societies: 12,
+                nk_n: 10,
+                nk_k: 2,
+                layout: ContinentalLayout::Regional,
+                isolation_factor: 0.2,
+                resource_multiplier: 1.0,
+                ..EvolutionConfig::default()
+            },
+            |frame: &GenerationFrame| {
+                frames.push(frame.clone());
+            },
+        );
+
+        assert!(!frames.is_empty());
+
+        // Check first frame
+        let first = &frames[0];
+        assert_eq!(first.snapshot.generation, 0);
+        assert!(first.snapshot.population_total > 0);
+        assert!(!first.continent_names.is_empty());
+        assert!(!first.continent_states.is_empty());
+        assert!(!first.societies.is_empty());
+        assert!(!first.carrying_capacities.is_empty());
+        assert!(first.carrying_capacities.iter().all(|&c| c > 0.0));
+        assert!((0.0..=1.0).contains(&first.snapshot.superorganism_index));
+
+        // Check last frame
+        let last = &frames[frames.len() - 1];
+        assert_eq!(last.snapshot.generation, 14);
+        assert!(last.snapshot.population_total > 0);
+
+        // Corridor strengths should be non-negative
+        for frame in &frames {
+            for &(_from, _to, strength) in &frame.corridor_strengths {
+                assert!(strength >= 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn observer_emits_map_events() {
+        let mut all_events: Vec<MapEvent> = Vec::new();
+        let _ = simulate_evolution_with_observer(
+            EvolutionConfig {
+                seed: 99,
+                generations: 300,
+                initial_societies: 20,
+                nk_n: 12,
+                nk_k: 3,
+                layout: ContinentalLayout::Connected,
+                isolation_factor: 0.1,
+                resource_multiplier: 0.6,
+                population_range: (8, 60),
+                initial_complexity_range: (0.05, 0.15),
+                ..EvolutionConfig::default()
+            },
+            |frame: &GenerationFrame| {
+                all_events.extend(frame.events.clone());
+            },
+        );
+
+        // With 300 generations and low resources, we should see various event types
+        assert!(!all_events.is_empty());
+
+        let has_collapse = all_events
+            .iter()
+            .any(|e| matches!(e, MapEvent::Collapse { .. }));
+        assert!(
+            has_collapse,
+            "expected at least one collapse event over 300 generations"
+        );
+
+        // Verify event continent indices are valid (0..4 for default world)
+        for event in &all_events {
+            match event {
+                MapEvent::NaturalDisaster {
+                    continent,
+                    severity,
+                } => {
+                    assert!(*continent < 4);
+                    assert!(*severity >= 0.0);
+                }
+                MapEvent::Pandemic {
+                    continent,
+                    severity,
+                } => {
+                    assert!(*continent < 4);
+                    assert!(*severity >= 0.0);
+                }
+                MapEvent::ClimateShock {
+                    continent,
+                    severity,
+                } => {
+                    assert!(*continent < 4);
+                    assert!(*severity >= 0.0);
+                }
+                MapEvent::Collapse { continent, .. } => {
+                    assert!(*continent < 4);
+                }
+                MapEvent::Migration { from, to } => {
+                    assert!(*from < 4);
+                    assert!(*to < 4);
+                }
+                MapEvent::ModeTransition {
+                    continent,
+                    from,
+                    to,
+                    ..
+                } => {
+                    assert!(*continent < 4);
+                    assert_ne!(from, to);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn observer_result_matches_direct_simulation() {
+        let config = EvolutionConfig {
+            seed: 55,
+            generations: 50,
+            initial_societies: 10,
+            nk_n: 10,
+            nk_k: 2,
+            layout: ContinentalLayout::Connected,
+            isolation_factor: 0.1,
+            resource_multiplier: 1.0,
+            ..EvolutionConfig::default()
+        };
+
+        let direct_result = simulate_evolution(config);
+        let mut observer_snapshots = Vec::new();
+        let observer_result = simulate_evolution_with_observer(config, |frame| {
+            observer_snapshots.push(frame.snapshot);
+        });
+
+        // Both should produce the same number of snapshots
+        assert_eq!(
+            direct_result.snapshots.len(),
+            observer_result.snapshots.len()
+        );
+        assert_eq!(observer_snapshots.len(), config.generations as usize);
+
+        // Same seed should produce identical results
+        for (d, o) in direct_result
+            .snapshots
+            .iter()
+            .zip(observer_result.snapshots.iter())
+        {
+            assert_eq!(d.generation, o.generation);
+            assert!((d.mean_complexity - o.mean_complexity).abs() < 1e-9);
+            assert_eq!(d.population_total, o.population_total);
+        }
     }
 }
